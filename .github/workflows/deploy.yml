@@ -106,8 +106,11 @@ jobs:
           export ZONE_NAME
           bun run wrangler:prepare
 
-      # 只把非空的 secret 写入 Worker，避免未配置的可选项把线上已有值覆盖成空。
-      - name: Generate Secrets JSON
+      # 可选：只有在仓库 Variables 里把 SYNC_WORKER_SECRETS 设为 true 时才同步 secrets。
+      # 默认跳过——Worker secrets 已在 Cloudflare 控制台维护，且这里改 settings 容易
+      # 撞上 "latest version isn't currently deployed" (code 10214) 导致部署失败。
+      - name: Sync Worker Secrets (optional)
+        if: vars.SYNC_WORKER_SECRETS == 'true'
         run: |
           cat <<EOF > secrets.raw.json
           {
@@ -130,14 +133,14 @@ jobs:
           jq 'with_entries(select(.value != ""))' secrets.raw.json > secrets.json
           echo "Secrets that will be updated:"
           jq -r 'keys[]' secrets.json
-
-      - name: Deploy to Cloudflare Workers
-        run: |
           if jq -e 'length > 0' secrets.json > /dev/null; then
             bunx wrangler secret bulk secrets.json
           else
             echo "No non-empty secrets to update, skipping secret bulk."
           fi
+
+      - name: Deploy to Cloudflare Workers
+        run: |
           bun run build
           bun run deploy
 
