@@ -103,6 +103,10 @@ export const Route = createRootRouteWithContext<MyRouterContext>()({
               src: "/stats.js",
               defer: true,
               "data-website-id": env.VITE_UMAMI_WEBSITE_ID,
+              // Umami 新版脚本默认把事件发到 https://gateway.umami.is；
+              // 这里强制回本站，走 /stats.js + /api/send 代理，避免直连失败，
+              // 也保证事件写入你配置的 UMAMI_SRC 实例。
+              "data-host-url": "/",
             },
           ]
         : [],
