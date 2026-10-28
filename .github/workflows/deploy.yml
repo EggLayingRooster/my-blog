@@ -89,6 +89,21 @@ jobs:
           echo "THEME=${{ vars.THEME }}" >> $GITHUB_ENV
           echo "TURNSTILE_SECRET_KEY=${{ secrets.TURNSTILE_SECRET_KEY }}" >> $GITHUB_ENV
 
+      - name: Validate required secrets
+        run: |
+          missing=""
+          for name in CLOUDFLARE_API_TOKEN CLOUDFLARE_ACCOUNT_ID D1_DATABASE_ID KV_NAMESPACE_ID BUCKET_NAME DOMAIN; do
+            value="$(printenv "$name" || true)"
+            if [ -z "$value" ]; then
+              missing="$missing $name"
+            fi
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::Missing required repository secrets:$missing"
+            exit 1
+          fi
+          echo "Required secrets OK."
+
       - name: Inject Resource IDs
         run: |
           ROUTE="${ROUTE:-${{ vars.ROUTE }}}"
@@ -97,9 +112,10 @@ jobs:
           export ZONE_NAME
           bun run wrangler:prepare
 
+      # 只把非空的 secret 写入 Worker，避免未配置的可选项把线上已有值覆盖成空。
       - name: Generate Secrets JSON
         run: |
-          cat <<EOF > secrets.json
+          cat <<EOF > secrets.raw.json
           {
             "BETTER_AUTH_SECRET": "$BETTER_AUTH_SECRET",
             "BETTER_AUTH_URL": "$BETTER_AUTH_URL",
@@ -117,19 +133,31 @@ jobs:
             "GITHUB_TOKEN": "$GITHUB_TOKEN"
           }
           EOF
+          jq 'with_entries(select(.value != ""))' secrets.raw.json > secrets.json
+          echo "Secrets that will be updated:"
+          jq -r 'keys[]' secrets.json
 
       - name: Deploy to Cloudflare Workers
         run: |
-          bunx wrangler secret bulk secrets.json
+          if jq -e 'length > 0' secrets.json > /dev/null; then
+            bunx wrangler secret bulk secrets.json
+          else
+            echo "No non-empty secrets to update, skipping secret bulk."
+          fi
           bun run build
           bun run deploy
 
+      # 非阻断：没有 Cache Purge 权限或未配置 token 时只打印状态，不影响部署结果。
       - name: Purge Cloudflare CDN Cache
         run: |
-          PURGE_DOMAIN=${CDN_DOMAIN:-$DOMAIN}
-          echo "Purging CDN cache for $PURGE_DOMAIN"
-          curl -s -X POST "https://api.cloudflare.com/client/v4/zones/$CLOUDFLARE_ZONE_ID/purge_cache" \
+          if [ -z "$CLOUDFLARE_ZONE_ID" ] || [ -z "$CLOUDFLARE_PURGE_API_TOKEN" ]; then
+            echo "skip purge: CLOUDFLARE_ZONE_ID / CLOUDFLARE_PURGE_API_TOKEN not configured"
+            exit 0
+          fi
+          HTTP_CODE="$(curl -s -o /dev/null -w '%{http_code}' -X POST \
+            "https://api.cloudflare.com/client/v4/zones/$CLOUDFLARE_ZONE_ID/purge_cache" \
             -H "Authorization: Bearer $CLOUDFLARE_PURGE_API_TOKEN" \
             -H "Content-Type: application/json" \
-            --data '{"prefixes":["'$PURGE_DOMAIN'"]}'
-          echo ""
+            --data '{"purge_everything":true}' || true)"
+          echo "purge_cache http status: ${HTTP_CODE:-unknown} (non-fatal)"
+          exit 0
