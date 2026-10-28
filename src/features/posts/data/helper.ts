@@ -20,11 +20,11 @@ export function buildPostWhereClause(options: {
   // For public pages, also filter by publishedAt
   if (options.publicOnly) {
     whereClauses.push(eq(PostsTable.status, "published"));
-    // Compare date portions only (ignore time-of-day) to avoid timezone issues.
-    // publishedAt is stored as Unix seconds; date('now') returns today's UTC date.
-    // This matches the isFuturePublishDate() string-based date comparison used in scheduling.
+    // 按站点本地时区（UTC+8）比较“日期”：publishedAt 存为所选日期的 12:00 UTC
+    // （= 北京时间 20:00）。如果直接用 UTC 日期比较，在北京时间 00:00–08:00
+    // 之间“今天”发布的文章会被当成未来日期，最多晚 8 小时才出现在前台。
     whereClauses.push(
-      sql`date(${PostsTable.publishedAt}, 'unixepoch') <= date('now')`,
+      sql`date(${PostsTable.publishedAt}, 'unixepoch', '+8 hours') <= date('now', '+8 hours')`,
     );
   }
 
