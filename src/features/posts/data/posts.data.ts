@@ -7,6 +7,7 @@ import {
   isNotNull,
   like,
   lt,
+  lte,
   ne,
   or,
   sql,
@@ -250,8 +251,8 @@ export async function getPublishedPostsForSitemapBatch(
       and(
         eq(PostsTable.status, "published"),
         isNotNull(PostsTable.publishedAt),
-        // 与公开列表一致：按站点本地时区（UTC+8）比较发布日期
-        sql`date(${PostsTable.publishedAt}, 'unixepoch', '+8 hours') <= date('now', '+8 hours')`,
+        // 与公开列表一致：按精确时间判断是否已到发布时间
+        lte(PostsTable.publishedAt, new Date()),
         cursor
           ? or(
               lt(PostsTable.publishedAt, cursor.publishedAt),

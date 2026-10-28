@@ -31,7 +31,6 @@ import {
   highlightCodeBlocks,
   slugify,
 } from "@/features/posts/utils/content";
-import { isFuturePublishDate } from "@/features/posts/utils/date";
 import { calculatePostHash } from "@/features/posts/utils/sync";
 import { generateTableOfContents } from "@/features/posts/utils/toc";
 import * as SearchService from "@/features/search/service/search.service";
@@ -465,8 +464,9 @@ export async function startPostProcessWorkflow(
     }
   }
 
+  // publishedAt 是发布者本地当天 00:00 的精确时间戳，直接按时间判断是否未来
   const isFuture =
-    !!publishedAtISO && isFuturePublishDate(publishedAtISO, data.clientToday);
+    !!publishedAtISO && new Date(publishedAtISO).getTime() > Date.now();
 
   await context.env.POST_PROCESS_WORKFLOW.create({
     params: {

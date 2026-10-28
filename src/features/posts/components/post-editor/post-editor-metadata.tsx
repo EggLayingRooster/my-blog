@@ -116,9 +116,9 @@ export function PostEditorMetadata({
               }
               onChange={(dateStr) =>
                 onPostChange({
-                  publishedAt: dateStr
-                    ? new Date(`${dateStr}T12:00:00Z`)
-                    : null,
+                  // 按发布者浏览器所在时区的“当天 00:00”保存为精确时间戳，
+                  // 到点即公开；不再存成固定 12:00 UTC（会丢失时区语义）。
+                  publishedAt: dateStr ? new Date(`${dateStr}T00:00:00`) : null,
                 })
               }
               className="h-auto! border-none! bg-transparent! p-0! text-xs text-foreground font-mono"

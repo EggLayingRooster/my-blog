@@ -1,6 +1,5 @@
 import type { WorkflowEvent, WorkflowStep } from "cloudflare:workers";
 import { WorkflowEntrypoint } from "cloudflare:workers";
-import { toUTCMidnight } from "@/features/posts/utils/date";
 import {
   fetchPost,
   invalidatePostCaches,
@@ -18,7 +17,8 @@ export class ScheduledPublishWorkflow extends WorkflowEntrypoint<Env, Params> {
 
     await step.sleepUntil(
       "sleep until publish date",
-      toUTCMidnight(new Date(event.payload.publishedAt)),
+      // publishedAt 存的是发布者本地当天 00:00 的精确时间戳，到点即发布
+      new Date(event.payload.publishedAt),
     );
 
     const post = await step.do("verify post status", async () => {

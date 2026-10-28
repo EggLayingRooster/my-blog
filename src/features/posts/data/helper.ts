@@ -1,5 +1,5 @@
 import type { SQL } from "drizzle-orm";
-import { and, asc, desc, eq, like, sql } from "drizzle-orm";
+import { and, asc, desc, eq, like, lte } from "drizzle-orm";
 import type { PostStatus } from "@/lib/db/schema";
 import { PostsTable } from "@/lib/db/schema";
 
@@ -20,12 +20,10 @@ export function buildPostWhereClause(options: {
   // For public pages, also filter by publishedAt
   if (options.publicOnly) {
     whereClauses.push(eq(PostsTable.status, "published"));
-    // 按站点本地时区（UTC+8）比较“日期”：publishedAt 存为所选日期的 12:00 UTC
-    // （= 北京时间 20:00）。如果直接用 UTC 日期比较，在北京时间 00:00–08:00
-    // 之间“今天”发布的文章会被当成未来日期，最多晚 8 小时才出现在前台。
-    whereClauses.push(
-      sql`date(${PostsTable.publishedAt}, 'unixepoch', '+8 hours') <= date('now', '+8 hours')`,
-    );
+    // 按精确时间比较：publishedAt 保存的是“发布者本地当天 00:00”的时间戳，
+    // 到点即公开。这样不管发布者在哪个时区，都按他当地日期生效，
+    // 不再依赖服务端 UTC 日期或硬编码时区偏移。
+    whereClauses.push(lte(PostsTable.publishedAt, new Date()));
   }
 
   // Search by title
