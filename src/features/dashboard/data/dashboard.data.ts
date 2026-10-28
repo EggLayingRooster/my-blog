@@ -45,9 +45,11 @@ export async function getRecentPosts(db: DB, limit = 5) {
 }
 
 export async function getRecentUsers(db: DB, limit = 5) {
+  // 只显示已完成邮箱验证的用户，避免机器人注册（未验证）刷屏系统日志
   return db
     .select()
     .from(UserTable)
+    .where(eq(UserTable.emailVerified, true))
     .orderBy(desc(UserTable.createdAt))
     .limit(limit);
 }
