@@ -5,8 +5,16 @@ concurrency:
   cancel-in-progress: true
 
 on:
-  # 自动部署已关闭：推送后由 Cloudflare 的 Git 自动构建（Workers Builds）负责部署。
-  # 需要手动用 GitHub Actions 部署时，在 Actions 页面点 "Run workflow" 即可。
+  # 由 GitHub Actions 负责构建和部署（push 到 main 自动触发）。
+  # 注意：Cloudflare 控制台里的 Workers Builds / Git 自动部署应断开，避免同一次 push 双重部署。
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - "**.md"
+      - ".agent/**"
+      - ".vscode/**"
+      - ".gitignore"
   workflow_dispatch:
 
 jobs:
