@@ -95,7 +95,8 @@ export function Turnstile({
           "error-callback": onError,
           "expired-callback": onExpire,
           action,
-          appearance: "interaction-only",
+          // 常显验证组件（默认 interaction-only 时会“无感”通过，页面上看不到任何东西）
+          appearance: "always",
         });
         internalWidgetIdRef.current = id;
         if (externalWidgetIdRef) {
