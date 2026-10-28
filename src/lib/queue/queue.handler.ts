@@ -28,8 +28,10 @@ export async function handleQueueBatch(
       continue;
     }
 
+    let eventType = "unknown";
     try {
       const event = parsed.data;
+      eventType = event.type;
       switch (event.type) {
         case "EMAIL":
           await handleEmailMessage(
@@ -61,6 +63,8 @@ export async function handleQueueBatch(
       console.error(
         JSON.stringify({
           message: "queue processing failed",
+          type: eventType,
+          messageId: message.id,
           attempt: message.attempts,
           error: error instanceof Error ? error.message : "unknown error",
         }),

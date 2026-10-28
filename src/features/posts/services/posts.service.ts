@@ -34,6 +34,8 @@ import {
 import { calculatePostHash } from "@/features/posts/utils/sync";
 import { generateTableOfContents } from "@/features/posts/utils/toc";
 import * as SearchService from "@/features/search/service/search.service";
+import { TAGS_CACHE_KEYS } from "@/features/tags/tags.schema";
+import { CACHE_TTL, POSTS_PAGE_SIZE } from "@/lib/constants";
 import { err, ok } from "@/lib/errors";
 import { purgePostCDNCache } from "@/lib/invalidate";
 
@@ -53,7 +55,7 @@ export async function getPinnedPosts(
     POSTS_CACHE_KEYS.pinned,
     PostItemSchema.array(),
     () => PostRepo.findPinnedPosts(context.db),
-    { ttl: "7d" },
+    { ttl: CACHE_TTL.pinnedPosts },
   );
 }
 
@@ -62,10 +64,12 @@ export async function getPostsCursor(
   data: GetPostsCursorInput,
 ) {
   const tagName = normalizePostTagName(data.tagName);
+  // 缓存键与回源查询必须使用同一个 limit（否则默认值不一致会串缓存）
+  const pageSize = data.limit ?? POSTS_PAGE_SIZE;
   const fetcher = async () =>
     await PostRepo.getPostsCursor(context.db, {
       cursor: data.cursor,
-      limit: data.limit,
+      limit: pageSize,
       publicOnly: true,
       tagName,
       excludePinned: data.excludePinned,
@@ -77,14 +81,15 @@ export async function getPostsCursor(
     (version) =>
       POSTS_CACHE_KEYS.list(
         version,
-        data.limit ?? 10,
+        pageSize,
         data.cursor ?? 0,
         tagName,
+        !!data.excludePinned,
       ),
     PostListResponseSchema,
     fetcher,
     {
-      ttl: "7d",
+      ttl: CACHE_TTL.postsList,
     },
   );
 }
@@ -126,7 +131,7 @@ export async function findPostBySlug(
     (version) => POSTS_CACHE_KEYS.detail(version, data.slug),
     PostWithTocSchema,
     fetcher,
-    { ttl: "7d" },
+    { ttl: CACHE_TTL.postsDetail },
   );
 }
 
@@ -141,16 +146,16 @@ export async function getRelatedPosts(
     return postIds;
   };
 
-  // Cache IDs for 7 days (long-lived cache)
-  // This key is NOT dependent on version, so it persists across publishes
-  const cacheKey = POSTS_CACHE_KEYS.related(data.slug, data.limit);
-  const cachedIds = await CacheService.get(
+  // 缓存 IDs。改用 posts:list 版本键：发布/下架/删除会 bump 版本，避免相关文章
+  // 因非版本化键而最长 7 天不更新。
+  const cachedIds = await CacheService.getVersioned(
     context,
-    cacheKey,
+    "posts:list",
+    (version) => POSTS_CACHE_KEYS.related(version, data.slug, data.limit),
     z.array(z.number()),
     fetcher,
     {
-      ttl: "7d",
+      ttl: CACHE_TTL.relatedPosts,
     },
   );
 
@@ -378,6 +383,8 @@ export async function deletePost(
       ),
     );
     tasks.push(CacheService.bumpVersion(context, "posts:list"));
+    // 与发布流程保持一致：标签公开列表也属于文章派生数据
+    tasks.push(CacheService.deleteKey(context, TAGS_CACHE_KEYS.publicList));
     tasks.push(SearchService.deleteIndex(context, { id: data.id }));
     tasks.push(purgePostCDNCache(context.env, post.slug));
     tasks.push(
@@ -409,21 +416,29 @@ export async function startPostProcessWorkflow(
   data: StartPostProcessInput,
 ) {
   let publishedAtISO: string | undefined;
+  let snapshotHash: string | undefined;
 
-  if (data.status === "published") {
-    const post = await PostRepo.findPostById(context.db, data.id);
-    if (post) {
-      const snapshotHash = await calculatePostHash({
-        title: post.title,
-        contentJson: post.contentJson,
-        summary: post.summary,
-        tagIds: post.tags.map((tag) => tag.id),
-        slug: post.slug,
-        publishedAt: post.publishedAt,
-        pinnedAt: post.pinnedAt,
-        readTimeInMinutes: post.readTimeInMinutes,
-      });
+  const post = await PostRepo.findPostById(context.db, data.id);
 
+  if (data.status === "published" && post) {
+    snapshotHash = await calculatePostHash({
+      title: post.title,
+      contentJson: post.contentJson,
+      summary: post.summary,
+      tagIds: post.tags.map((tag) => tag.id),
+      slug: post.slug,
+      publishedAt: post.publishedAt,
+      pinnedAt: post.pinnedAt,
+      readTimeInMinutes: post.readTimeInMinutes,
+    });
+
+    // 幂等：同一内容重复点击发布会重复插入 publish revision，先比对最近一次
+    const latestPublishRevision = await PostRevisionRepo.findLatestPostRevision(
+      context.db,
+      post.id,
+      { reason: "publish" },
+    );
+    if (latestPublishRevision?.snapshotHash !== snapshotHash) {
       await PostRevisionRepo.insertPostRevision(context.db, {
         postId: post.id,
         reason: "publish",
@@ -452,7 +467,6 @@ export async function startPostProcessWorkflow(
 
   // Check if we need to auto-set the published date
   if (data.status === "published") {
-    const post = await PostRepo.findPostById(context.db, data.id);
     if (post && !post.publishedAt) {
       const now = new Date();
       await PostRepo.updatePost(context.db, post.id, {
@@ -468,16 +482,7 @@ export async function startPostProcessWorkflow(
   const isFuture =
     !!publishedAtISO && new Date(publishedAtISO).getTime() > Date.now();
 
-  await context.env.POST_PROCESS_WORKFLOW.create({
-    params: {
-      postId: data.id,
-      isPublished: data.status === "published",
-      publishedAt: publishedAtISO,
-      isFuturePost: isFuture,
-    },
-  });
-
-  // Defensively terminate any existing scheduled publish workflow for this post
+  // 先终止旧的定时发布实例，再创建新的 workflow，避免两个实例并发处理同一篇
   const scheduledId = `post-${data.id}-scheduled`;
   try {
     const oldInstance =
@@ -487,13 +492,60 @@ export async function startPostProcessWorkflow(
     // Instance doesn't exist or already completed, ignore
   }
 
+  const postProcessParams = {
+    postId: data.id,
+    isPublished: data.status === "published",
+    publishedAt: publishedAtISO,
+    isFuturePost: isFuture,
+  };
+
+  // 用内容 hash 作为实例 id：同一内容重复发布不会创建重复实例；若实例 id 冲突则回退到无 id 创建
+  try {
+    await context.env.POST_PROCESS_WORKFLOW.create({
+      id: `post-${data.id}-process-${snapshotHash ?? "unpublish"}`,
+      params: postProcessParams,
+    });
+  } catch (error) {
+    console.error(
+      JSON.stringify({
+        message: "post process workflow create with id failed, retrying",
+        postId: data.id,
+        error: error instanceof Error ? error.message : String(error),
+      }),
+    );
+    await context.env.POST_PROCESS_WORKFLOW.create({
+      params: postProcessParams,
+    });
+  }
+
   // If this is a future post, create a new scheduled publish workflow
   if (data.status === "published" && isFuture) {
-    await context.env.SCHEDULED_PUBLISH_WORKFLOW.createBatch([
-      {
-        id: scheduledId,
-        params: { postId: data.id, publishedAt: publishedAtISO! },
-      },
-    ]);
+    const scheduledParams = {
+      postId: data.id,
+      publishedAt: publishedAtISO!,
+    };
+    try {
+      await context.env.SCHEDULED_PUBLISH_WORKFLOW.createBatch([
+        { id: scheduledId, params: scheduledParams },
+      ]);
+    } catch (error) {
+      console.error(
+        JSON.stringify({
+          message: "scheduled workflow create conflict, retrying after terminate",
+          postId: data.id,
+          error: error instanceof Error ? error.message : String(error),
+        }),
+      );
+      try {
+        const instance =
+          await context.env.SCHEDULED_PUBLISH_WORKFLOW.get(scheduledId);
+        await instance.terminate();
+      } catch {
+        // ignore
+      }
+      await context.env.SCHEDULED_PUBLISH_WORKFLOW.createBatch([
+        { id: scheduledId, params: scheduledParams },
+      ]);
+    }
   }
 }

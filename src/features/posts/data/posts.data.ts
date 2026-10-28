@@ -18,6 +18,7 @@ import {
   buildPostWhereClause,
 } from "@/features/posts/data/helper";
 import type { PostListItem } from "@/features/posts/schema/posts.schema";
+import { MAX_POSTS_PAGE_SIZE } from "@/lib/constants";
 import type { PostStatus, Tag } from "@/lib/db/schema";
 import { PostsTable, PostTagsTable, TagsTable } from "@/lib/db/schema";
 
@@ -56,6 +57,11 @@ export async function getPosts(
     sortBy,
     ...filters
   } = options;
+  const safeOffset = Math.max(0, Math.floor(offset));
+  const safeLimit = Math.min(
+    MAX_POSTS_PAGE_SIZE,
+    Math.max(1, Math.floor(limit)),
+  );
   const whereClause = buildPostWhereClause(filters);
   const orderByClause = buildPostOrderByClause(sortDir, sortBy);
 
@@ -73,8 +79,8 @@ export async function getPosts(
       updatedAt: PostsTable.updatedAt,
     })
     .from(PostsTable)
-    .limit(Math.min(limit, 50))
-    .offset(offset)
+    .limit(safeLimit)
+    .offset(safeOffset)
     .orderBy(orderByClause)
     .where(whereClause);
   return posts;
@@ -122,6 +128,11 @@ export async function getPostsCursor(
     excludePinned,
   } = options;
 
+  const safeLimit = Math.min(
+    MAX_POSTS_PAGE_SIZE,
+    Math.max(1, Math.floor(limit)),
+  );
+
   // Build base conditions from helper
   const baseConditions = buildPostWhereClause({ publicOnly });
 
@@ -137,7 +148,12 @@ export async function getPostsCursor(
       columns: { publishedAt: true, id: true },
     });
 
-    if (reference?.publishedAt) {
+    if (!reference) {
+      // cursor 指向的文章已被删除/不存在：返回空页，避免静默回到第一页造成重复分页
+      return { items: [], nextCursor: null };
+    }
+
+    if (reference.publishedAt) {
       conditions.push(
         or(
           lt(PostsTable.publishedAt, reference.publishedAt),
@@ -186,11 +202,11 @@ export async function getPostsCursor(
   const itemsWithPotentialNext = await query
     .where(conditions.length > 0 ? and(...conditions) : undefined)
     .orderBy(desc(PostsTable.publishedAt), desc(PostsTable.id))
-    .limit(limit + 1);
+    .limit(safeLimit + 1);
 
   // Check if there's a next page
-  const hasMore = itemsWithPotentialNext.length > limit;
-  const items = itemsWithPotentialNext.slice(0, limit) as Array<PostListItem>;
+  const hasMore = itemsWithPotentialNext.length > safeLimit;
+  const items = itemsWithPotentialNext.slice(0, safeLimit) as Array<PostListItem>;
 
   // Fetch tags for all items
   if (items.length > 0) {
@@ -237,6 +253,7 @@ export async function getPublishedPostsForSitemapBatch(
   } = {},
 ): Promise<Array<SitemapPostRow>> {
   const { cursor, limit = DEFAULT_SITEMAP_BATCH_SIZE } = options;
+  const safeLimit = Math.min(1000, Math.max(1, Math.floor(limit)));
 
   return await db
     .select({
@@ -265,7 +282,7 @@ export async function getPublishedPostsForSitemapBatch(
       ),
     )
     .orderBy(desc(PostsTable.publishedAt), desc(PostsTable.id))
-    .limit(limit);
+    .limit(safeLimit);
 }
 
 export async function findPostById(db: DB, id: number) {
@@ -470,6 +487,10 @@ export async function getRelatedPostIds(
   options: { limit?: number } = {},
 ) {
   const { limit = 3 } = options;
+  const safeLimit = Math.min(
+    MAX_POSTS_PAGE_SIZE,
+    Math.max(1, Math.floor(limit)),
+  );
 
   // 1. Get current post ID and its tags
   const currentPost = await db.query.PostsTable.findFirst({
@@ -499,12 +520,14 @@ export async function getRelatedPostIds(
       and(
         ne(PostsTable.id, currentPost.id),
         eq(PostsTable.status, "published"),
+        // 与公开列表一致：只把已达发布时间的文章放进缓存
+        lte(PostsTable.publishedAt, new Date()),
         inArray(PostTagsTable.tagId, tagIds),
       ),
     )
     .groupBy(PostsTable.id)
     .orderBy(desc(sql`match_count`), desc(PostsTable.publishedAt))
-    .limit(limit);
+    .limit(safeLimit);
 
   return matchingPosts.map((p) => p.id);
 }

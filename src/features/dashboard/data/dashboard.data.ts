@@ -1,4 +1,4 @@
-import { count, desc, eq } from "drizzle-orm";
+import { and, count, desc, eq, lte } from "drizzle-orm";
 import { CommentsTable, PostsTable, user as UserTable } from "@/lib/db/schema";
 
 export async function getPendingCommentsCount(db: DB) {
@@ -13,7 +13,13 @@ export async function getPublishedPostsCount(db: DB) {
   const [result] = await db
     .select({ count: count() })
     .from(PostsTable)
-    .where(eq(PostsTable.status, "published"));
+    .where(
+      and(
+        eq(PostsTable.status, "published"),
+        // 与前台口径一致：未来排期文章不算“已发布”
+        lte(PostsTable.publishedAt, new Date()),
+      ),
+    );
   return result.count;
 }
 
@@ -39,7 +45,13 @@ export async function getRecentPosts(db: DB, limit = 5) {
   return db
     .select()
     .from(PostsTable)
-    .where(eq(PostsTable.status, "published"))
+    .where(
+      and(
+        eq(PostsTable.status, "published"),
+        // 与前台口径一致：不把未来排期文章当作“最近发布”
+        lte(PostsTable.publishedAt, new Date()),
+      ),
+    )
     .orderBy(desc(PostsTable.publishedAt))
     .limit(limit);
 }

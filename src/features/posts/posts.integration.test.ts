@@ -369,11 +369,98 @@ describe("Posts Integration", () => {
       ]);
     });
 
+    it("rejects out-of-range limit on the public list API", async () => {
+      const oversized = await testRequest(
+        postsListRoute,
+        "/?limit=999",
+        {},
+        adminContext.env,
+      );
+      expect(oversized.status).toBe(400);
+
+      const negative = await testRequest(
+        postsListRoute,
+        "/?limit=-1",
+        {},
+        adminContext.env,
+      );
+      expect(negative.status).toBe(400);
+    });
+
+    it("clamps an oversized limit when called through the service", async () => {
+      const publicContext = createTestContext();
+      await createPublishedPost("Clamp A", "clamp-a");
+
+      const result = await PostService.getPostsCursor(publicContext, {
+        limit: 999,
+      });
+
+      expect(result.items.length).toBeLessThanOrEqual(50);
+    });
+
+    it("returns an empty page when the cursor post no longer exists", async () => {
+      const publicContext = createTestContext();
+      await createPublishedPost("Cursor A", "cursor-a");
+      await createPublishedPost("Cursor B", "cursor-b");
+      await createPublishedPost("Cursor C", "cursor-c");
+
+      const firstPage = await PostService.getPostsCursor(publicContext, {
+        limit: 2,
+      });
+      expect(firstPage.items).toHaveLength(2);
+      expect(firstPage.nextCursor).not.toBeNull();
+
+      await PostService.deletePost(adminContext, {
+        id: firstPage.nextCursor!,
+      });
+      await waitForBackgroundTasks(adminContext.executionCtx);
+
+      const nextPage = await PostService.getPostsCursor(createTestContext(), {
+        limit: 2,
+        cursor: firstPage.nextCursor!,
+      });
+      expect(nextPage.items).toHaveLength(0);
+      expect(nextPage.nextCursor).toBeNull();
+    });
+
+    it("keeps excludePinned variants in separate cache entries", async () => {
+      const publicContext = createTestContext();
+      const pinnedId = await createPublishedPost("Pinned Post", "pinned-post");
+      await updatePost({ id: pinnedId, data: { pinnedAt: new Date() } });
+      await createPublishedPost("Normal Post", "normal-post");
+
+      const withPinned = await PostService.getPostsCursor(publicContext, {});
+      await waitForBackgroundTasks(publicContext.executionCtx);
+      expect(withPinned.items.map((post) => post.slug).sort()).toEqual([
+        "normal-post",
+        "pinned-post",
+      ]);
+
+      const excludePinned = await PostService.getPostsCursor(
+        createTestContext(),
+        {
+          excludePinned: true,
+        },
+      );
+      expect(excludePinned.items.map((post) => post.slug)).toEqual([
+        "normal-post",
+      ]);
+
+      const withPinnedAgain = await PostService.getPostsCursor(
+        createTestContext(),
+        {},
+      );
+      expect(withPinnedAgain.items.map((post) => post.slug).sort()).toEqual([
+        "normal-post",
+        "pinned-post",
+      ]);
+    });
+
     it("should read the current Post list from D1 when the generation cannot be read", async () => {
       const publicContext = createTestContext();
       await createPublishedPost("Fresh Post", "fresh-post");
       await publicContext.env.KV.put(
-        POSTS_CACHE_KEYS.list("v0", 10, 0).join(":"),
+        POSTS_CACHE_KEYS.list("v0", 12, 0, undefined, false).join(":"),
         JSON.stringify({ items: [], nextCursor: null }),
       );
       vi.spyOn(publicContext.env.KV, "get").mockRejectedValueOnce(
@@ -731,14 +818,16 @@ describe("Posts Integration", () => {
 
       expect(
         adminContext.env.POST_PROCESS_WORKFLOW.create,
-      ).toHaveBeenCalledWith({
-        params: {
-          postId: id,
-          isPublished: true,
-          publishedAt: expect.any(String),
-          isFuturePost: false,
-        },
-      });
+      ).toHaveBeenCalledWith(
+        expect.objectContaining({
+          params: {
+            postId: id,
+            isPublished: true,
+            publishedAt: expect.any(String),
+            isFuturePost: false,
+          },
+        }),
+      );
     });
 
     it("should auto-set publishedAt when publishing for the first time", async () => {

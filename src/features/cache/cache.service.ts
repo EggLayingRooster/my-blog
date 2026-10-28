@@ -37,6 +37,14 @@ export async function get<T extends z.ZodTypeAny>(
       console.log(JSON.stringify({ message: "cache hit", key: serializedKey }));
       return result.data;
     }
+    // 坏缓存（结构过期/写入异常）：记录后回源重建，避免静默永久 miss
+    console.error(
+      JSON.stringify({
+        message: "cache data invalid",
+        key: serializedKey,
+        error: result.error.message,
+      }),
+    );
   }
 
   const data = await fetcher();
@@ -120,6 +128,20 @@ export async function deleteKey(
         ),
       ),
     ),
+  );
+}
+
+/**
+ * 删除缓存，失败时抛出（供发布等关键失效路径使用，让 Workflow 重试）。
+ * 普通非关键路径继续用 deleteKey（失败仅记录）。
+ */
+export async function deleteKeyStrict(
+  context: BaseContext,
+  ...keys: Array<CacheKey>
+): Promise<void> {
+  const serializedKeys = keys.map(serializeKey);
+  await Promise.all(
+    serializedKeys.map((key) => context.env.KV.delete(key)),
   );
 }
 

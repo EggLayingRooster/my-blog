@@ -6,6 +6,7 @@ import {
 } from "@/features/pageview/pageview.schema";
 import * as PostRepo from "@/features/posts/data/posts.data";
 import { PostItemSchema } from "@/features/posts/schema/posts.schema";
+import { CACHE_TTL } from "@/lib/constants";
 
 export async function getPopularPosts(
   context: DbContext & { executionCtx: ExecutionContext },
@@ -39,7 +40,7 @@ export async function getPopularPosts(
         return post ? [post] : [];
       });
     },
-    { ttl: "3h" },
+    { ttl: CACHE_TTL.popularPosts },
   );
 }
 
@@ -54,6 +55,6 @@ export async function getViewCounts(
     PAGEVIEW_CACHE_KEYS.viewCounts(slugs),
     ViewCountsSchema,
     () => PageviewRepo.getViewCountsBySlugs(context.db, slugs),
-    { ttl: "5m" },
+    { ttl: CACHE_TTL.viewCounts },
   );
 }

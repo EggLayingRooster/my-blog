@@ -5,6 +5,7 @@ import {
 } from "drizzle-zod";
 import { z } from "zod";
 import { TagSelectSchema } from "@/features/tags/tags.schema";
+import { MAX_POSTS_PAGE_SIZE } from "@/lib/constants";
 import type { Post, PostStatus, Tag } from "@/lib/db/schema";
 import { POST_STATUSES, PostsTable } from "@/lib/db/schema";
 import { NullableJsonContentSchema } from "./json-content.schema";
@@ -27,6 +28,9 @@ export const PostUpdateSchema = createUpdateSchema(PostsTable, {
   publicContentJson: NullableJsonContentSchema.optional(),
 }).omit({
   publicContentJson: true,
+  // 主键与时间戳不允许通过更新接口修改
+  id: true,
+  createdAt: true,
 });
 
 export const PostItemSchema = PostSelectSchema.omit({
@@ -61,8 +65,8 @@ export const PostTagNameSchema = z
   .optional();
 
 export const GetPostsCursorInputSchema = z.object({
-  cursor: z.number().optional(),
-  limit: z.number().optional(),
+  cursor: z.number().int().min(0).optional(),
+  limit: z.number().int().min(1).max(MAX_POSTS_PAGE_SIZE).optional(),
   tagName: PostTagNameSchema,
   excludePinned: z.boolean().optional(),
 });
@@ -73,7 +77,7 @@ export const FindPostBySlugInputSchema = z.object({
 
 export const FindRelatedPostsInputSchema = z.object({
   slug: z.string(),
-  limit: z.number().optional(),
+  limit: z.number().int().min(1).max(MAX_POSTS_PAGE_SIZE).optional(),
 });
 
 export type GetPostsCursorInput = z.infer<typeof GetPostsCursorInputSchema>;
@@ -87,8 +91,8 @@ export const GenerateSlugInputSchema = z.object({
 });
 
 export const GetPostsInputSchema = z.object({
-  offset: z.number().optional(),
-  limit: z.number().optional(),
+  offset: z.number().int().min(0).optional(),
+  limit: z.number().int().min(1).max(MAX_POSTS_PAGE_SIZE).optional(),
   status: z.custom<PostStatus>().optional(),
   publicOnly: z.boolean().optional(),
   search: z.string().optional(),
@@ -138,13 +142,36 @@ export type PostItem = z.infer<typeof PostItemSchema>;
 export type PostWithToc = z.infer<typeof PostWithTocSchema>;
 
 export const POSTS_CACHE_KEYS = {
-  list: (version: string, limit: number, cursor: number, tagName?: string) =>
+  list: (
+    version: string,
+    limit: number,
+    cursor: number,
+    tagName: string | undefined,
+    excludePinned: boolean,
+  ) =>
     tagName === undefined
-      ? (["posts", "list", version, limit, cursor, "all"] as const)
-      : (["posts", "list", version, limit, cursor, "tag", tagName] as const),
+      ? ([
+          "posts",
+          "list",
+          version,
+          limit,
+          cursor,
+          excludePinned ? "exclude-pinned" : "include-pinned",
+          "all",
+        ] as const)
+      : ([
+          "posts",
+          "list",
+          version,
+          limit,
+          cursor,
+          excludePinned ? "exclude-pinned" : "include-pinned",
+          "tag",
+          tagName,
+        ] as const),
   detail: (version: string, slug: string) => [version, "post", slug] as const,
-  related: (slug: string, limit?: number) =>
-    ["posts", "related-ids", slug, limit] as const,
+  related: (version: string, slug: string, limit?: number) =>
+    [version, "posts", "related-ids", slug, limit] as const,
   syncHash: (id: number) => `post_hash:${id}` as const,
   pinned: (version: string) => [version, "posts", "pinned"] as const,
 } as const;

@@ -14,10 +14,14 @@ export async function fetchPost(env: Env, postId: number) {
 export async function invalidatePostCaches(env: Env, slug: string) {
   const version = await CacheService.getVersion({ env }, "posts:detail");
   await Promise.all([
-    CacheService.deleteKey({ env }, POSTS_CACHE_KEYS.detail(version, slug)),
+    // 关键失效失败要抛出，让 Workflow 重试（普通 deleteKey 会吞掉错误）
+    CacheService.deleteKeyStrict(
+      { env },
+      POSTS_CACHE_KEYS.detail(version, slug),
+    ),
     purgePostCDNCache(env, slug),
     CacheService.bumpVersion({ env }, "posts:list"),
-    CacheService.deleteKey({ env }, TAGS_CACHE_KEYS.publicList),
+    CacheService.deleteKeyStrict({ env }, TAGS_CACHE_KEYS.publicList),
   ]);
 }
 
