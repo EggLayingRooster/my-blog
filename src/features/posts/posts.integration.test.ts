@@ -472,32 +472,49 @@ describe("Posts Integration", () => {
       expect(result.items[0].title).toBe("TypeScript Post");
     });
 
-    it("should show post whose publishedAt is today (UTC) even if stored time is later in the day", async () => {
+    it("hides a post whose publishedAt is in the future", async () => {
       const publicContext = createTestContext();
 
-      // Simulate the editor bug scenario: user selects "today" which stores as noon UTC
-      // (new Date(`${dateStr}T12:00:00Z`)), but current UTC time may be before noon.
-      // We use end-of-day to reliably ensure the stored time is "future" within today.
-      const todayUTC = new Date().toISOString().slice(0, 10);
-      const endOfTodayUTC = new Date(`${todayUTC}T23:59:59Z`);
+      // publishedAt 现在是精确时间戳（发布者本地当天 00:00），到点才公开；
+      // 未来时间应不可见。
+      const future = new Date(Date.now() + 60 * 60 * 1000);
 
       const { id } = await PostService.createEmptyPost(adminContext);
       await updatePost({
         id,
         data: {
-          title: "Today Post",
-          slug: "today-post",
+          title: "Future Post",
+          slug: "future-post",
           status: "published",
-          publishedAt: endOfTodayUTC,
+          publishedAt: future,
         },
       });
 
       const result = await PostService.getPostsCursor(publicContext, {});
 
-      // Should be visible because the publishedAt DATE equals today,
-      // even though the stored time (23:59:59Z) is technically in the future
+      expect(result.items).toHaveLength(0);
+    });
+
+    it("shows a post once its publishedAt is in the past", async () => {
+      const publicContext = createTestContext();
+
+      const past = new Date(Date.now() - 60 * 60 * 1000);
+
+      const { id } = await PostService.createEmptyPost(adminContext);
+      await updatePost({
+        id,
+        data: {
+          title: "Past Post",
+          slug: "past-post",
+          status: "published",
+          publishedAt: past,
+        },
+      });
+
+      const result = await PostService.getPostsCursor(publicContext, {});
+
       expect(result.items).toHaveLength(1);
-      expect(result.items[0].title).toBe("Today Post");
+      expect(result.items[0].title).toBe("Past Post");
     });
 
     it("should return empty when no posts match tag", async () => {

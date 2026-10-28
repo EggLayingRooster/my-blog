@@ -120,10 +120,16 @@ export class PostProcessWorkflow extends WorkflowEntrypoint<Env, Params> {
       });
     }
 
-    // 5. Invalidate caches
-    await step.do("invalidate caches", async () => {
-      await invalidatePostCaches(this.env, updatedPost.slug);
-    });
+    // 5. Invalidate caches（purge CDN 可能瞬时失败，重试几次，避免前台继续命中旧缓存）
+    await step.do(
+      "invalidate caches",
+      {
+        retries: { limit: 3, delay: "10 seconds", backoff: "exponential" },
+      },
+      async () => {
+        await invalidatePostCaches(this.env, updatedPost.slug);
+      },
+    );
 
     // 6. Update sync hash in KV
     await step.do("update sync hash", async () => {

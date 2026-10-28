@@ -27,9 +27,16 @@ export class ScheduledPublishWorkflow extends WorkflowEntrypoint<Env, Params> {
 
     if (!post || post.status !== "published") return;
 
-    await step.do("invalidate caches", async () => {
-      await invalidatePostCaches(this.env, post.slug);
-    });
+    // purge CDN 可能瞬时失败，重试几次，避免到点后前台仍命中旧缓存
+    await step.do(
+      "invalidate caches",
+      {
+        retries: { limit: 3, delay: "10 seconds", backoff: "exponential" },
+      },
+      async () => {
+        await invalidatePostCaches(this.env, post.slug);
+      },
+    );
 
     await step.do("update search index", async () => {
       await upsertPostSearchIndex(this.env, post);
