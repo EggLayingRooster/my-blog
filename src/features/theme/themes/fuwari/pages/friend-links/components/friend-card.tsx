@@ -1,21 +1,25 @@
 import { ExternalLink, Globe } from "lucide-react";
-import type { FriendLinkWithUser } from "@/features/friend-links/friend-links.schema";
+import type { FriendLinkPublic } from "@/features/friend-links/friend-links.schema";
 import { cn } from "@/lib/utils";
 import { m } from "@/paraglide/messages";
 
 interface FriendCardProps {
-  link: Omit<FriendLinkWithUser, "createdAt" | "updatedAt">;
+  link: FriendLinkPublic;
   className?: string;
   style?: React.CSSProperties;
 }
 
 export function FriendCard({ link, className, style }: FriendCardProps) {
-  const avatarUrl = link.logoUrl || link.user?.image;
+  // 防御：仅允许 http(s) 链接作为 href/src（历史数据可能包含危险协议）
+  const safeHref = /^https?:\/\//i.test(link.siteUrl) ? link.siteUrl : "#";
+  const avatarUrl = [link.logoUrl, link.user?.image].find(
+    (url): url is string => !!url && /^https?:\/\//i.test(url),
+  );
   const description = link.description || m.friend_links_unknown_site();
 
   return (
     <a
-      href={link.siteUrl}
+      href={safeHref}
       target="_blank"
       rel="noopener noreferrer"
       className={cn(

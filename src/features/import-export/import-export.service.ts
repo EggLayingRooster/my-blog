@@ -71,9 +71,17 @@ export async function startExport(
   return ok({ taskId });
 }
 
+const MAX_IMPORT_UPLOAD_BYTES = 50 * 1024 * 1024; // 50MB（压缩包/文件总大小）
+const MAX_IMPORT_UNCOMPRESSED_BYTES = 200 * 1024 * 1024; // 200MB（解压后总大小）
+
 export async function startImport(context: BaseContext, files: Array<File>) {
   if (files.length === 0) {
     return err({ reason: "NO_FILES" });
+  }
+
+  const totalUploadBytes = files.reduce((sum, file) => sum + file.size, 0);
+  if (totalUploadBytes > MAX_IMPORT_UPLOAD_BYTES) {
+    return err({ reason: "IMPORT_TOO_LARGE" });
   }
 
   const taskId = crypto.randomUUID();
@@ -105,8 +113,20 @@ export async function startImport(context: BaseContext, files: Array<File>) {
       zipData = buildZip(zipEntries);
     }
 
+    if (zipData.byteLength > MAX_IMPORT_UPLOAD_BYTES) {
+      return err({ reason: "IMPORT_TOO_LARGE" });
+    }
+
     // Detect mode from ZIP contents
     const zipFiles = parseZip(zipData);
+    const uncompressedBytes = Object.values(zipFiles).reduce(
+      (sum, file) => sum + file.byteLength,
+      0,
+    );
+    if (uncompressedBytes > MAX_IMPORT_UNCOMPRESSED_BYTES) {
+      return err({ reason: "IMPORT_TOO_LARGE" });
+    }
+
     const manifest = readValidated(
       zipFiles,
       "manifest.json",

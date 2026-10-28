@@ -23,7 +23,25 @@ import * as MediaService from "./service/media.service";
 describe("MediaService", () => {
   let adminContext: ReturnType<typeof createAdminTestContext>;
 
-  // Mock R2 storage functions
+  const IMAGE_SIGNATURES: Record<string, number[]> = {
+  "image/png": [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a],
+  "image/jpeg": [0xff, 0xd8, 0xff, 0xe0],
+  "image/gif": [0x47, 0x49, 0x46, 0x38],
+  "image/webp": [0x52, 0x49, 0x46, 0x46, 0, 0, 0, 0, 0x57, 0x45, 0x42, 0x50],
+};
+
+function createImageFile(
+  name: string,
+  type: "image/png" | "image/jpeg" | "image/gif" | "image/webp",
+  size = 0,
+): File {
+  const signature = IMAGE_SIGNATURES[type];
+  const total = Math.max(size, signature.length);
+  const bytes = new Uint8Array(total);
+  bytes.set(signature);
+  return new File([bytes], name, { type });
+}
+// Mock R2 storage functions
   beforeEach(async () => {
     adminContext = createAdminTestContext();
     await seedUser(adminContext.db, adminContext.session.user);
@@ -52,9 +70,7 @@ describe("MediaService", () => {
   // ============================================
   describe("Upload Flow", () => {
     it("should upload file and create DB record", async () => {
-      const file = new File(["fake image content"], "test-image.png", {
-        type: "image/png",
-      });
+      const file = createImageFile("test-image.png", "image/png");
 
       const result = unwrap(await MediaService.upload(adminContext, { file }));
 
@@ -66,7 +82,7 @@ describe("MediaService", () => {
       expect(result.url).toContain("/images/");
 
       // Verify Storage.putToR2 was called
-      expect(Storage.putToR2).toHaveBeenCalledWith(adminContext.env, file);
+      expect(Storage.putToR2).toHaveBeenCalledWith(adminContext.env, file, { contentType: "image/png", extension: "png" });
 
       // Verify DB record was created
       const mediaList = await MediaService.getMediaList(adminContext, {});
@@ -74,9 +90,7 @@ describe("MediaService", () => {
     });
 
     it("should rollback R2 upload when DB insert fails", async () => {
-      const file = new File(["test content"], "rollback-test.png", {
-        type: "image/png",
-      });
+      const file = createImageFile("rollback-test.png", "image/png");
 
       // Make putToR2 work but insertMedia fail
       const mockKey = `rollback-key-${Date.now()}`;
@@ -108,10 +122,7 @@ describe("MediaService", () => {
     });
 
     it("should calculate correct file size", async () => {
-      const content = "x".repeat(1024); // 1KB
-      const file = new File([content], "sized-file.jpg", {
-        type: "image/jpeg",
-      });
+      const file = createImageFile("sized-file.jpg", "image/jpeg", 1024);
 
       const result = unwrap(await MediaService.upload(adminContext, { file }));
 
@@ -125,9 +136,7 @@ describe("MediaService", () => {
   describe("Deletion Flow", () => {
     it("should delete from both DB and trigger R2 cleanup", async () => {
       // First upload a file
-      const file = new File(["delete me"], "to-delete.png", {
-        type: "image/png",
-      });
+      const file = createImageFile("to-delete.png", "image/png");
       const uploaded = unwrap(
         await MediaService.upload(adminContext, { file }),
       );
@@ -162,9 +171,7 @@ describe("MediaService", () => {
     beforeEach(async () => {
       // Upload some test files
       for (let i = 1; i <= 5; i++) {
-        const file = new File([`content ${i}`], `query-test-${i}.png`, {
-          type: "image/png",
-        });
+        const file = createImageFile(`query-test-${i}.png`, "image/png");
         unwrap(await MediaService.upload(adminContext, { file }));
       }
     });
@@ -198,9 +205,7 @@ describe("MediaService", () => {
 
     it("should search media by filename", async () => {
       // Upload a uniquely named file
-      const uniqueFile = new File(["unique"], "special-unique-file.png", {
-        type: "image/png",
-      });
+      const uniqueFile = createImageFile("special-unique-file.png", "image/png");
       unwrap(await MediaService.upload(adminContext, { file: uniqueFile }));
 
       const result = await MediaService.getMediaList(adminContext, {
@@ -219,9 +224,7 @@ describe("MediaService", () => {
     });
 
     it("should update media filename", async () => {
-      const file = new File(["rename me"], "original-name.png", {
-        type: "image/png",
-      });
+      const file = createImageFile("original-name.png", "image/png");
       const uploaded = unwrap(
         await MediaService.upload(adminContext, { file }),
       );
@@ -244,9 +247,7 @@ describe("MediaService", () => {
   describe("Post-Media Relationships", () => {
     it("should track media usage in posts", async () => {
       // Upload media
-      const file = new File(["linked image"], "linked-image.png", {
-        type: "image/png",
-      });
+      const file = createImageFile("linked-image.png", "image/png");
       const media = unwrap(await MediaService.upload(adminContext, { file }));
 
       // Create a post
@@ -276,9 +277,7 @@ describe("MediaService", () => {
     });
 
     it("should return false for unused media", async () => {
-      const file = new File(["unused"], "unused-image.png", {
-        type: "image/png",
-      });
+      const file = createImageFile("unused-image.png", "image/png");
       const media = unwrap(await MediaService.upload(adminContext, { file }));
 
       const isInUse = await MediaService.isMediaInUse(adminContext, media.key);
@@ -291,7 +290,7 @@ describe("MediaService", () => {
       const mediaKeys: Array<string> = [];
 
       for (const fileName of files) {
-        const file = new File(["content"], fileName, { type: "image/png" });
+        const file = createImageFile(fileName, "image/png");
         const media = unwrap(await MediaService.upload(adminContext, { file }));
         mediaKeys.push(media.key);
       }

@@ -4,6 +4,7 @@ import { Hono } from "hono";
 import { proxy } from "hono/proxy";
 import { exportDownloadRoute } from "@/features/import-export/api/hono/download.route";
 import { handleImageRequest } from "@/features/media/service/media.service";
+import { isValidMediaKey } from "@/features/media/utils/media.utils";
 import postsDetailRoute from "@/features/posts/api/hono/posts.detail.route";
 import postsListRoute from "@/features/posts/api/hono/posts.list.route";
 import postsRelatedRoute from "@/features/posts/api/hono/posts.related.route";
@@ -76,7 +77,11 @@ app.all("/api/send", async (c) => {
 app.get("/images/:key{.+}", async (c) => {
   const key = c.req.param("key");
 
-  if (!key) return c.text("Image key is required", 400);
+  // 只允许媒体对象（UUID 文件名）或站点资源（asset/ 前缀）。
+  // 否则该公开路由会变成任意 R2 对象读取器（例如 exports/*.zip 导出包）。
+  if (!key || !isValidMediaKey(key)) {
+    return c.text("Not Found", 404);
+  }
 
   try {
     return await handleImageRequest(c.env, key, c.req.raw);
@@ -92,7 +97,17 @@ app.get("/images/:key{.+}", async (c) => {
   }
 });
 
-app.get("/api/auth/*", baseMiddleware, forwardAuthRequest);
+app.get(
+  "/api/auth/*",
+  baseMiddleware,
+  rateLimitMiddleware({
+    capacity: 120,
+    interval: "1m",
+    identifier: (c) =>
+      `auth-get:${c.req.header("cf-connecting-ip") ?? "unknown"}`,
+  }),
+  forwardAuthRequest,
+);
 
 const protectedAuthPaths = [
   "/api/auth/sign-in/email",
@@ -101,11 +116,20 @@ const protectedAuthPaths = [
   "/api/auth/send-verification-email",
 ] as const;
 
+// 所有认证请求共享的全局桶：避免攻击者在多个 auth 路径间轮换绕过单路径限流
+const authGlobalRateLimit = rateLimitMiddleware({
+  capacity: 30,
+  interval: "1m",
+  identifier: (c) =>
+    `auth-global:${c.req.header("cf-connecting-ip") ?? "unknown"}`,
+});
+
 protectedAuthPaths.forEach((path) => {
   app.post(
     path,
     baseMiddleware,
     turnstileMiddleware,
+    authGlobalRateLimit,
     rateLimitMiddleware({
       capacity: 5,
       interval: "1m",
@@ -123,6 +147,7 @@ protectedAuthPaths.forEach((path) => {
 app.post(
   "/api/auth/*",
   baseMiddleware,
+  authGlobalRateLimit,
   rateLimitMiddleware({
     capacity: 5,
     interval: "1m",

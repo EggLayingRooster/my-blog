@@ -1,4 +1,4 @@
-import { ClientOnly, Link } from "@tanstack/react-router";
+import { Link } from "@tanstack/react-router";
 import {
   Calendar,
   ChevronRight,
@@ -89,9 +89,9 @@ export function PostCard({
               dateTime={post.publishedAt?.toISOString()}
               className="text-sm font-medium"
             >
-              <ClientOnly fallback="-">
+              
                 {formatDate(post.publishedAt)}
-              </ClientOnly>
+              
             </time>
           </div>
           {tagNames.length > 0 && (

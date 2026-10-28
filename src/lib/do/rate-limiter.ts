@@ -76,7 +76,14 @@ export class RateLimiter extends DurableObject {
       Promise.all([
         this.ctx.storage.put("bucket", this.state),
         this.ctx.storage.setAlarm(now + this.CLEANUP_INTERVAL),
-      ]),
+      ]).catch((error) => {
+        console.error(
+          JSON.stringify({
+            message: "rate limiter state persist failed",
+            error: error instanceof Error ? error.message : String(error),
+          }),
+        );
+      }),
     );
 
     return {

@@ -21,12 +21,15 @@ export function useComments(postId?: number) {
         switch (reason) {
           case "ROOT_COMMENT_NOT_FOUND":
           case "REPLY_TO_COMMENT_NOT_FOUND":
+          case "POST_NOT_FOUND":
+          case "POST_NOT_PUBLISHED":
             toast.error(m.comments_toast_deleted_refresh());
             return;
           case "INVALID_ROOT_ID":
           case "ROOT_COMMENT_POST_MISMATCH":
           case "REPLY_TO_COMMENT_ROOT_MISMATCH":
           case "ROOT_COMMENT_CANNOT_HAVE_REPLY_TO":
+          case "COMMENT_TOO_LARGE":
             toast.error(m.comments_toast_structure_error());
             return;
           default: {

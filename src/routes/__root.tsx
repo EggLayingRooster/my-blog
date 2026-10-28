@@ -1,19 +1,22 @@
-import { TanStackDevtools } from "@tanstack/react-devtools";
 import type { QueryClient } from "@tanstack/react-query";
 import {
+  ClientOnly,
   createRootRouteWithContext,
   HeadContent,
   Scripts,
   useRouteContext,
 } from "@tanstack/react-router";
-import { TanStackRouterDevtoolsPanel } from "@tanstack/react-router-devtools";
 import theme from "@theme";
+import { lazy, Suspense } from "react";
 import { ThemeProvider } from "@/components/common/theme-provider";
 import { siteConfigQuery } from "@/features/config/queries";
-import TanStackQueryDevtools from "@/integrations/tanstack-query/devtools";
 import { clientEnv } from "@/lib/env/client.env";
 import { getLocale } from "@/paraglide/runtime";
 import appCss from "@/styles.css?url";
+
+const Devtools = import.meta.env.DEV
+  ? lazy(() => import("@/components/common/devtools"))
+  : null;
 
 interface MyRouterContext {
   queryClient: QueryClient;
@@ -46,6 +49,14 @@ export const Route = createRootRouteWithContext<MyRouterContext>()({
         {
           name: "description",
           content: loaderData?.siteConfig?.description,
+        },
+        {
+          property: "og:site_name",
+          content: loaderData?.siteConfig?.title,
+        },
+        {
+          name: "twitter:card",
+          content: "summary_large_image",
         },
       ],
       links: [
@@ -129,18 +140,13 @@ function RootDocument({ children }: { children: React.ReactNode }) {
       </head>
       <body>
         <ThemeProvider>{children}</ThemeProvider>
-        <TanStackDevtools
-          config={{
-            position: "bottom-right",
-          }}
-          plugins={[
-            {
-              name: "Tanstack Router",
-              render: <TanStackRouterDevtoolsPanel />,
-            },
-            TanStackQueryDevtools,
-          ]}
-        />
+        {Devtools ? (
+          <ClientOnly>
+            <Suspense fallback={null}>
+              <Devtools />
+            </Suspense>
+          </ClientOnly>
+        ) : null}
         <Scripts />
       </body>
     </html>

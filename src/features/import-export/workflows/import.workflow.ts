@@ -209,6 +209,22 @@ export class ImportWorkflow extends WorkflowEntrypoint<
             : m.import_export_common_unknown_error({}, { locale }),
         ],
       });
+
+      // 失败时也清理上传的导入包，避免长期占用 R2
+      try {
+        await this.env.R2.delete(r2Key);
+      } catch (cleanupError) {
+        console.error(
+          JSON.stringify({
+            message: "import workflow failed to cleanup zip",
+            taskId,
+            error:
+              cleanupError instanceof Error
+                ? cleanupError.message
+                : String(cleanupError),
+          }),
+        );
+      }
     }
   }
 

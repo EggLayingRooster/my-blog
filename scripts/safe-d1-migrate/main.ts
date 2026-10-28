@@ -175,14 +175,55 @@ function wranglerEnv(): NodeJS.ProcessEnv {
   };
 }
 
+function resolveNodeCommand() {
+  if (process.versions.node) {
+    return process.execPath;
+  }
+
+  const candidates = [process.env.NODE_BINARY, process.env.npm_node_execpath]
+    .map((value) => value?.trim())
+    .filter((value): value is string => Boolean(value));
+
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) {
+      return candidate;
+    }
+  }
+
+  const probe = spawnSync("node", ["--version"], { encoding: "utf8" });
+  if (probe.status === 0) {
+    return "node";
+  }
+
+  throw new Error(
+    "safe-d1-migrate requires Node.js >=22.12 (wrangler does not run reliably under Bun). " +
+      "Install Node.js or set NODE_BINARY to a node executable.",
+  );
+}
+
+function resolveWranglerInvocation(args: Array<string>) {
+  const localBin = path.join(
+    cwd,
+    "node_modules",
+    "wrangler",
+    "bin",
+    "wrangler.js",
+  );
+  if (!fs.existsSync(localBin)) {
+    throw new Error("wrangler is not installed; run bun install first.");
+  }
+  return { args: [localBin, ...args], command: resolveNodeCommand() };
+}
+
 function formatCommand(args: Array<string>) {
-  return ["bunx", "wrangler", ...args].join(" ");
+  return ["wrangler", ...args].join(" ");
 }
 
 function runWrangler(args: Array<string>) {
   console.log(`$ ${formatCommand(args)}`);
 
-  const result = spawnSync("bunx", ["wrangler", ...args], {
+  const invocation = resolveWranglerInvocation(args);
+  const result = spawnSync(invocation.command, invocation.args, {
     cwd,
     env: wranglerEnv(),
     encoding: "utf8",
@@ -624,11 +665,11 @@ async function main() {
     );
   }
 
-  let migrationApplied = false;
+  let migrationAttempted = false;
 
   try {
+    migrationAttempted = true;
     applyMigrations(database, target, effectivePersistTo);
-    migrationApplied = true;
 
     const after = collectSafetySummary(database, target, effectivePersistTo);
     const afterSummaryPath = writeSummary("after", stamp, after);
@@ -656,7 +697,7 @@ async function main() {
     const message = error instanceof Error ? error.message : String(error);
     console.error(message);
 
-    if (!migrationApplied || !autoRollback) {
+    if (!migrationAttempted || !autoRollback) {
       process.exit(1);
     }
 

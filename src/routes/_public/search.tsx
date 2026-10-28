@@ -3,6 +3,8 @@ import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import theme from "@theme";
 import { useEffect, useMemo, useState } from "react";
 import { z } from "zod";
+import { siteConfigQuery } from "@/features/config/queries";
+import { buildPageTitle } from "@/lib/seo";
 import {
   searchDocsQueryOptions,
   searchMetaQuery,
@@ -17,17 +19,20 @@ const searchSchema = z.object({
 export const Route = createFileRoute("/_public/search")({
   validateSearch: (search) => searchSchema.parse(search),
   component: SearchRoute,
-  loader: () => {
+  loader: async ({ context }) => {
+    const siteConfig = await context.queryClient.ensureQueryData(siteConfigQuery);
     return {
-      title: m.search_title(),
+      title: buildPageTitle(m.search_title(), siteConfig.title),
+      description: siteConfig.description,
     };
   },
   head: ({ loaderData }) => {
     return {
       meta: [
-        {
-          title: loaderData?.title,
-        },
+        { title: loaderData?.title },
+        { name: "description", content: loaderData?.description },
+        // 搜索页不进入索引，避免空结果/查询参数页面被收录
+        { name: "robots", content: "noindex, nofollow" },
       ],
     };
   },

@@ -1,4 +1,5 @@
 import { type AuthType, WorkerMailer } from "worker-mailer";
+import * as CacheService from "@/features/cache/cache.service";
 import * as ConfigService from "@/features/config/service/config.service";
 import * as EmailData from "@/features/email/data/email.data";
 import type { TestEmailConnectionInput } from "@/features/email/email.schema";
@@ -210,6 +211,28 @@ export async function sendEmail(
     return err({ reason: "EMAIL_DISABLED" });
   }
 
+  // Queue 至少一次投递 + 失败重试：用 idempotencyKey 去重，避免同一封邮件重复发送
+  const idempotencyKey = options.idempotencyKey
+    ? `email:idem:${options.idempotencyKey}`
+    : null;
+  if (idempotencyKey) {
+    const alreadySent = await CacheService.getRaw(
+      { env: context.env },
+      idempotencyKey,
+    );
+    if (alreadySent) {
+      console.log(
+        JSON.stringify({
+          event: "email_skipped",
+          reason: "duplicate",
+          to: options.to,
+          idempotencyKey: options.idempotencyKey,
+        }),
+      );
+      return ok({ success: true });
+    }
+  }
+
   try {
     const security = resolveTransportSecurity(email.port);
 
@@ -254,6 +277,13 @@ export async function sendEmail(
     return err({
       reason: "SEND_FAILED",
       message: errorMessage,
+    });
+  }
+
+  // 发送成功后再标记，避免"标记成功但未发送"导致丢信；失败重试时会再次尝试发送
+  if (idempotencyKey) {
+    await CacheService.set({ env: context.env }, idempotencyKey, "1", {
+      ttl: "24h",
     });
   }
 

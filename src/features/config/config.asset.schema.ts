@@ -2,7 +2,7 @@ import type { ThemeName } from "@/features/theme/registry";
 import { themeNames } from "@/features/theme/registry";
 import type { Messages } from "@/lib/i18n";
 
-export const SITE_ASSET_MAX_FILE_SIZE = 8 * 1024 * 1024; // 2MB
+export const SITE_ASSET_MAX_FILE_SIZE = 8 * 1024 * 1024; // 8MB
 
 export const SITE_ASSET_ACCEPTED_TYPES = [
   "image/jpeg",
@@ -27,6 +27,10 @@ const ALLOWED_ASSET_PREFIXES = [
 
 function isAllowedAssetPath(path: string): boolean {
   const normalized = path.replace(/^\/+/, "").replace(/\\/g, "/");
+  // 禁止路径穿越/特殊字符，只允许常规资源路径字符
+  if (normalized.includes("..") || !/^[a-z0-9/._-]+$/i.test(normalized)) {
+    return false;
+  }
   return ALLOWED_ASSET_PREFIXES.some((prefix) => normalized.startsWith(prefix));
 }
 

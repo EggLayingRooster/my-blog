@@ -3,6 +3,8 @@ import { clsx } from "clsx";
 import { twMerge } from "tailwind-merge";
 
 import { m } from "@/paraglide/messages";
+import { getLocale } from "@/paraglide/runtime";
+import { SITE_TIME_ZONE } from "@/lib/constants";
 
 export const isSSR = typeof window === "undefined";
 
@@ -10,28 +12,73 @@ export function cn(...inputs: Array<ClassValue>) {
   return twMerge(clsx(inputs));
 }
 
+function getIntlLocale() {
+  return getLocale() === "zh" ? "zh-CN" : "en-US";
+}
+
+/**
+ * 使用固定的站点时区 + 当前 locale 格式化日期。
+ * 服务端与客户端输出一致（不再依赖运行环境时区），因此可以安全地 SSR 渲染。
+ */
 export function formatDate(
   date: Date | undefined | null | string | number,
   options: { includeTime?: boolean } = {},
 ) {
   if (!date) return "";
   const d = new Date(date);
-  if (options.includeTime) {
-    return m.format_datetime({ date: d });
-  }
-  return m.format_date({ date: d });
+  if (Number.isNaN(d.getTime())) return "";
+
+  const locale = getLocale();
+  const includeTime = options.includeTime === true;
+
+  return new Intl.DateTimeFormat(getIntlLocale(), {
+    year: "numeric",
+    month: locale === "zh" ? "long" : "2-digit",
+    day: locale === "zh" ? "numeric" : "2-digit",
+    ...(includeTime
+      ? { hour: "2-digit", minute: "2-digit", hour12: false }
+      : {}),
+    timeZone: SITE_TIME_ZONE,
+  }).format(d);
 }
 
 export function formatTime(date: Date | undefined | null | string | number) {
   if (!date) return "";
-  return m.format_time({ date: new Date(date) });
+  const d = new Date(date);
+  if (Number.isNaN(d.getTime())) return "";
+  return new Intl.DateTimeFormat(getIntlLocale(), {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+    timeZone: SITE_TIME_ZONE,
+  }).format(d);
 }
 
 export function formatMonthDayTime(
   date: Date | undefined | null | string | number,
 ) {
   if (!date) return "";
-  return m.format_month_day_time({ date: new Date(date) });
+  const d = new Date(date);
+  if (Number.isNaN(d.getTime())) return "";
+  return new Intl.DateTimeFormat(getIntlLocale(), {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+    timeZone: SITE_TIME_ZONE,
+  }).format(d);
+}
+
+export function formatMonthDay(date: Date | undefined | null | string | number) {
+  if (!date) return "";
+  const d = new Date(date);
+  if (Number.isNaN(d.getTime())) return "";
+  return new Intl.DateTimeFormat(getIntlLocale(), {
+    month: "short",
+    day: "numeric",
+    timeZone: SITE_TIME_ZONE,
+  }).format(d);
 }
 
 export function formatTimeAgo(date: Date | null | string) {

@@ -65,6 +65,30 @@ export async function getAllFriendLinks(
   return items;
 }
 
+/**
+ * 公开友链：只返回展示所需字段，避免把 contactEmail/rejectionReason 等
+ * 提交者隐私信息暴露给所有访客。
+ */
+export async function getApprovedFriendLinks(db: DB) {
+  return await db
+    .select({
+      id: FriendLinksTable.id,
+      siteName: FriendLinksTable.siteName,
+      siteUrl: FriendLinksTable.siteUrl,
+      description: FriendLinksTable.description,
+      logoUrl: FriendLinksTable.logoUrl,
+      user: {
+        id: user.id,
+        name: user.name,
+        image: user.image,
+      },
+    })
+    .from(FriendLinksTable)
+    .leftJoin(user, eq(FriendLinksTable.userId, user.id))
+    .where(eq(FriendLinksTable.status, "approved"))
+    .orderBy(desc(FriendLinksTable.createdAt));
+}
+
 export async function getAllFriendLinksCount(
   db: DB,
   options: { status?: FriendLinkStatus } = {},

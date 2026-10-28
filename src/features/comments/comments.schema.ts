@@ -55,10 +55,14 @@ export const GetUserStatsInputSchema = z.object({
 });
 
 // Public API Schemas
+const paginationInput = {
+  offset: z.number().int().min(0).optional(),
+  limit: z.number().int().min(1).max(100).optional(),
+} as const;
+
 export const GetCommentsByPostIdInputSchema = z.object({
   postId: z.number(),
-  offset: z.number().optional(),
-  limit: z.number().optional(),
+  ...paginationInput,
 });
 
 export const GetCommentsResponseSchema = z.object({
@@ -69,8 +73,7 @@ export const GetCommentsResponseSchema = z.object({
 export const GetRepliesByRootIdInputSchema = z.object({
   postId: z.number(),
   rootId: z.number(),
-  offset: z.number().optional(),
-  limit: z.number().optional(),
+  ...paginationInput,
 });
 
 export const ReplyWithUserAndReplyToSchema = CommentWithUserSchema.extend({
@@ -114,15 +117,13 @@ export const DeleteCommentInputSchema = z.object({
 });
 
 export const GetMyCommentsInputSchema = z.object({
-  offset: z.number().optional(),
-  limit: z.number().optional(),
+  ...paginationInput,
   status: z.custom<CommentStatus>().optional(),
 });
 
 // Admin API Schemas
 export const GetAllCommentsInputSchema = z.object({
-  offset: z.number().optional(),
-  limit: z.number().optional(),
+  ...paginationInput,
   status: z.custom<CommentStatus>().optional(),
   postId: z.number().optional(),
   userId: z.string().optional(),

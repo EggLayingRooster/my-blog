@@ -7,8 +7,10 @@ import { siteConfigQuery, siteDomainQuery } from "@/features/config/queries";
 import { recordPageViewFn } from "@/features/pageview/api/pageview.api";
 import { postBySlugQuery, relatedPostsQuery } from "@/features/posts/queries";
 import {
+  buildAbsoluteAssetUrl,
   buildArticleJsonLd,
   buildCanonicalUrl,
+  buildPageTitle,
   canonicalLink,
 } from "@/lib/seo";
 
@@ -40,6 +42,8 @@ export const Route = createFileRoute("/_public/post/$slug")({
     return {
       post,
       authorName: siteConfig.author,
+      siteTitle: siteConfig.title,
+      ogImage: buildAbsoluteAssetUrl(domain, siteConfig.icons.webApp512),
       canonicalHref: buildCanonicalUrl(
         domain,
         `/post/${encodeURIComponent(post.slug)}`,
@@ -53,7 +57,7 @@ export const Route = createFileRoute("/_public/post/$slug")({
     return {
       meta: [
         {
-          title: post?.title,
+          title: buildPageTitle(post?.title, loaderData?.siteTitle),
         },
         {
           name: "description",
@@ -63,6 +67,11 @@ export const Route = createFileRoute("/_public/post/$slug")({
         { property: "og:description", content: post?.summary ?? "" },
         { property: "og:type", content: "article" },
         { property: "og:url", content: canonicalHref },
+        { property: "og:site_name", content: loaderData?.siteTitle ?? "" },
+        { property: "og:image", content: loaderData?.ogImage ?? "" },
+        { name: "twitter:card", content: "summary_large_image" },
+        { property: "article:published_time", content: post?.publishedAt ? new Date(post.publishedAt).toISOString() : "" },
+        { property: "article:modified_time", content: post?.updatedAt ? new Date(post.updatedAt).toISOString() : "" },
       ],
       links: [canonicalLink(canonicalHref)],
       scripts: post

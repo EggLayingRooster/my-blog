@@ -7,7 +7,9 @@ import type {
 import { getImageDimensions } from "@/features/media/utils/image-dimensions";
 import {
   buildTransformOptions,
+  detectImageMime,
   getContentTypeFromKey,
+  getExtensionForMime,
 } from "@/features/media/utils/media.utils";
 import * as PostMediaRepo from "@/features/posts/data/post-media.data";
 import { CACHE_CONTROL } from "@/lib/constants";
@@ -19,11 +21,23 @@ export async function upload(
 ) {
   const { file } = input;
 
-  const dimensions = getImageDimensions(await file.arrayBuffer());
+  const buffer = await file.arrayBuffer();
+  const bytes = new Uint8Array(buffer);
+  // 服务端按文件头识别真实图片类型，忽略客户端可控的 file.type
+  const detectedMime = detectImageMime(bytes);
+  if (!detectedMime) {
+    return err({ reason: "MEDIA_INVALID_TYPE" });
+  }
+  const extension = getExtensionForMime(detectedMime);
+
+  const dimensions = getImageDimensions(buffer);
   const width = dimensions?.width;
   const height = dimensions?.height;
 
-  const uploaded = await Storage.putToR2(context.env, file);
+  const uploaded = await Storage.putToR2(context.env, file, {
+    contentType: detectedMime,
+    extension,
+  });
 
   try {
     const mediaRecord = await MediaRepo.insertMedia(context.db, {
@@ -147,6 +161,16 @@ export async function handleImageRequest(
     object.writeHttpMetadata(headers);
     headers.set("Content-Type", contentType);
     headers.set("ETag", object.httpEtag);
+    headers.set("X-Content-Type-Options", "nosniff");
+
+    // SVG 作为同源资源返回时可能执行脚本（存储型 XSS），强制沙箱化并禁止脚本
+    if (/image\/svg\+xml/i.test(contentType)) {
+      headers.set("Content-Disposition", 'inline; filename="image.svg"');
+      headers.set(
+        "Content-Security-Policy",
+        "sandbox; default-src 'none'; style-src 'unsafe-inline'",
+      );
+    }
 
     return new Response(object.body, { headers });
   };
@@ -208,6 +232,7 @@ export async function handleImageRequest(
 
     // 覆盖/补充必要的缓存头
     newResponse.headers.set("Vary", "Accept");
+    newResponse.headers.set("X-Content-Type-Options", "nosniff");
     Object.entries(CACHE_CONTROL.immutable).forEach(([k, v]) => {
       newResponse.headers.set(k, v);
     });

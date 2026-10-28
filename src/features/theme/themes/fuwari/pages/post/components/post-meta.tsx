@@ -1,4 +1,4 @@
-import { ClientOnly, Link } from "@tanstack/react-router";
+import { Link } from "@tanstack/react-router";
 import { Calendar, Edit, Tag } from "lucide-react";
 import type { PostItem } from "@/features/posts/schema/posts.schema";
 import { cn, formatDate } from "@/lib/utils";
@@ -29,7 +29,7 @@ export function PostMeta({ post, className }: PostMetaProps) {
           <Calendar strokeWidth={1.5} size={20} />
         </div>
         <span className="text-sm font-medium fuwari-text-50">
-          <ClientOnly fallback="-">{formatDate(published)}</ClientOnly>
+          {formatDate(published)}
         </span>
       </div>
 
@@ -40,7 +40,7 @@ export function PostMeta({ post, className }: PostMetaProps) {
             <Edit strokeWidth={1.5} size={20} />
           </div>
           <span className="text-sm font-medium fuwari-text-50">
-            <ClientOnly fallback="-">{formatDate(updated)}</ClientOnly>
+            {formatDate(updated)}
           </span>
         </div>
       )}

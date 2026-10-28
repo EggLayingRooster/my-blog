@@ -11,7 +11,7 @@ import { postsInfiniteQueryOptions } from "@/features/posts/queries";
 import { PostTagNameSchema } from "@/features/posts/schema/posts.schema";
 import { getNextPostTagFilter } from "@/features/posts/utils/post-tag-filter";
 import { tagsQueryOptions } from "@/features/tags/queries";
-import { buildCanonicalUrl, canonicalLink } from "@/lib/seo";
+import { buildCanonicalUrl, buildPageTitle, canonicalLink } from "@/lib/seo";
 import { m } from "@/paraglide/messages";
 
 const { postsPerPage } = theme.config.posts;
@@ -37,7 +37,7 @@ export const Route = createFileRoute("/_public/posts")({
     ]);
 
     return {
-      title: m.posts_title(),
+      title: buildPageTitle(m.posts_title(), siteConfig.title),
       description: siteConfig.description,
       canonicalHref: buildCanonicalUrl(domain, "/posts", {
         tagName: deps.tagName,

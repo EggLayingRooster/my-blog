@@ -47,6 +47,29 @@ export function canonicalLink(href: string) {
   } as const;
 }
 
+/** 页面标题统一带站点名后缀（首页/标题已含站点名时不重复） */
+export function buildPageTitle(
+  title: string | null | undefined,
+  siteTitle: string | null | undefined,
+) {
+  const pageTitle = title?.trim();
+  const site = siteTitle?.trim();
+  if (!pageTitle) return site ?? "";
+  if (!site || pageTitle === site) return pageTitle;
+  return `${pageTitle} - ${site}`;
+}
+
+/** 把站点内的相对资源路径转成绝对 URL（用于 og:image 等） */
+export function buildAbsoluteAssetUrl(
+  domain: string,
+  pathOrUrl: string | null | undefined,
+) {
+  if (!pathOrUrl) return undefined;
+  if (/^https?:\/\//i.test(pathOrUrl)) return pathOrUrl;
+  const path = pathOrUrl.startsWith("/") ? pathOrUrl : `/${pathOrUrl}`;
+  return `https://${domain}${path}`;
+}
+
 export function buildArticleJsonLd({
   authorName,
   canonicalHref,

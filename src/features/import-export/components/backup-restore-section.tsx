@@ -292,6 +292,7 @@ export function BackupRestoreSection() {
               });
               return;
             case "UPLOAD_FAILED":
+            case "IMPORT_TOO_LARGE":
               toast.error(m.settings_maintenance_restore_toast_upload_fail(), {
                 description:
                   m.settings_maintenance_restore_toast_upload_failed_desc(),

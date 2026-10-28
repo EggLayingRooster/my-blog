@@ -35,7 +35,7 @@ export function buildSnippet({
     terms.length > 0 ? terms : fallbackTerm ? [fallbackTerm] : [];
 
   if (activeTerms.length === 0) {
-    return source.slice(0, snippetSlice);
+    return escapeSearchHtml(source.slice(0, snippetSlice));
   }
 
   const lowerSource = source.toLowerCase();
@@ -44,7 +44,7 @@ export function buildSnippet({
     findApproxMatch(source, activeTerms, scanLimit, fuzzyMaxDistance);
 
   if (!match) {
-    return source.slice(0, snippetSlice);
+    return escapeSearchHtml(source.slice(0, snippetSlice));
   }
 
   const { idx, len, token } = match;
@@ -56,11 +56,11 @@ export function buildSnippet({
       : Math.min(source.length, idx + len + SNIPPET_CONTEXT);
 
   const slice = source.slice(start, end);
-  const safeSlice = escapeHtml(slice);
+  const safeSlice = escapeSearchHtml(slice);
 
   const highlightTerms = [token, ...activeTerms]
     .filter((t) => t && t.length > 0)
-    .map((t) => escapeRegExp(escapeHtml(t)));
+    .map((t) => escapeRegExp(escapeSearchHtml(t)));
 
   const highlightRegex = new RegExp(highlightTerms.join("|"), "gi");
 
@@ -76,7 +76,7 @@ function escapeRegExp(str: string) {
   return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-function escapeHtml(unsafe: string) {
+export function escapeSearchHtml(unsafe: string) {
   return unsafe
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")

@@ -58,11 +58,30 @@ const tryCacheResponse = (c: Context, cache: Cache) => {
 
   if (!isCacheable) return;
 
+  // HTML 页面随 locale 变化，禁止进入共享 Cache API（避免语言串页/旧页面长期残留）
+  const contentType = c.res.headers.get("Content-Type") ?? "";
+  if (contentType.toLowerCase().includes("text/html")) return;
+
   const responseToCache = c.res.clone();
   c.executionCtx.waitUntil(
     cache.put(c.req.raw, responseToCache).catch(() => {}),
   );
 };
+
+/** 只有这些前缀的 GET 响应才走共享缓存；HTML 页面由 cacheMiddleware 直接跳过 */
+const SHARED_CACHE_PREFIXES = [
+  "/api/",
+  "/images/",
+  "/assets/",
+  "/_serverFn/",
+  "/stats.js",
+  "/rss.xml",
+  "/atom.xml",
+  "/feed.json",
+  "/sitemap.xml",
+  "/robots.txt",
+  "/site.webmanifest",
+] as const;
 
 export const cacheMiddleware = createMiddleware(async (c, next) => {
   if (c.req.method !== "GET") {
@@ -70,6 +89,15 @@ export const cacheMiddleware = createMiddleware(async (c, next) => {
   }
 
   const path = c.req.path;
+
+  const isSharedCacheablePath = SHARED_CACHE_PREFIXES.some((prefix) =>
+    path.startsWith(prefix),
+  );
+  if (!isSharedCacheablePath) {
+    // 页面 HTML（以及其它非白名单路径）不做 Cache API 共享缓存：
+    // 内容随 locale/cookie 变化，按 URL 缓存会串语言，也无法在部署后自动失效。
+    return next();
+  }
 
   // 排除需要 session 的 API（如 /api/auth, /api/send）
   // 但包含 public API（/api/posts, /api/post, /api/tags, /api/search）
@@ -165,8 +193,19 @@ export const shieldMiddleware = createMiddleware(async (c, next) => {
 /* ======================= Turnstile ====================== */
 export const turnstileMiddleware = createMiddleware<{ Bindings: Env }>(
   async (c, next) => {
-    const secretKey = serverEnv(c.env).TURNSTILE_SECRET_KEY;
-    if (!secretKey) return next(); // 未配置则跳过验证
+    const env = serverEnv(c.env);
+    const secretKey = env.TURNSTILE_SECRET_KEY;
+    const isProduction = env.ENVIRONMENT !== "dev" && env.ENVIRONMENT !== "test";
+    if (!secretKey) {
+      if (isProduction) {
+        console.error(
+          JSON.stringify({
+            message: "turnstile secret missing in production, verification skipped",
+          }),
+        );
+      }
+      return next();
+    }
 
     const token = c.req.header("X-Turnstile-Token");
     if (!token) {
@@ -179,7 +218,24 @@ export const turnstileMiddleware = createMiddleware<{ Bindings: Env }>(
       );
     }
 
-    const result = await verifyTurnstileToken({ secretKey, token });
+    const path = c.req.path;
+    const expectedAction =
+      path === "/api/auth/sign-in/email"
+        ? "login"
+        : path === "/api/auth/sign-up/email"
+          ? "register"
+          : undefined;
+
+    const result = await verifyTurnstileToken({
+      secretKey,
+      token,
+      // 本地/测试环境使用 Turnstile 测试 key，hostname/action 不匹配，故跳过；
+      // 生产环境强制校验来源站点与 action，避免 token 被跨站/跨用途重放。
+      expectedAction: isProduction ? expectedAction : undefined,
+      expectedHostname: isProduction
+        ? new URL(c.req.url).hostname
+        : undefined,
+    });
 
     if (!result.success) {
       return c.json(

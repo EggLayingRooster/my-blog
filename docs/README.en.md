@@ -184,7 +184,7 @@ Please refer to the **[Flare Stack Blog Deployment Guide](./deployment-guide.en.
 
 | Variable                     | Scope   | Description                                                          |
 | :--------------------------- | :------ | :------------------------------------------------------------------- |
-| `CLOUDFLARE_API_TOKEN`       | CI/CD   | Cloudflare API Token (Worker deployment + D1 read/write permissions) |
+| `CLOUDFLARE_API_TOKEN`       | Local migration | Cloudflare API Token (D1 read/write) for `bun db:migrate` |
 | `CLOUDFLARE_ACCOUNT_ID`      | CI/CD   | Cloudflare Account ID                                                |
 | `D1_DATABASE_ID`             | CI/CD   | D1 Database ID                                                       |
 | `KV_NAMESPACE_ID`            | CI/CD   | KV Namespace ID                                                      |
@@ -269,7 +269,7 @@ bun dev
 | :--------------------- | :---------------------------------------------------------- |
 | `bun db:studio`        | Invokes the Drizzle Studio visual database interface        |
 | `bun db:generate`      | Generates schema migration files                            |
-| `bun db:migrate`       | Safely applies remote D1 migrations and auto-rolls back on failure |
+| `bun db:migrate`       | Safely applies remote D1 migrations and auto-rolls back on failure (run manually before deploying schema changes) |
 | `bun db:migrate:local` | Safely applies local D1 migrations and auto-restores local state |
 | `bun db:migrate:unsafe` | Applies remote D1 migrations directly without verification |
 

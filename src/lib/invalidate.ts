@@ -104,6 +104,10 @@ export async function purgePostCDNCache(env: Env, slug: string) {
       `/api/post/${slug}/related`, // 相关文章 API
       `/api/tags`, // 标签 API
       "/",
+      "/sitemap.xml",
+      "/rss.xml",
+      "/atom.xml",
+      "/feed.json",
     ],
     prefixes: [
       "/posts", // 列表页面

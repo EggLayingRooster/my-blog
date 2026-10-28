@@ -188,11 +188,11 @@ Flare Stack Blog 的所有面向用户的页面与布局均通过 **主题契约
 
 | 变量名                       | 用途   | 说明                                              |
 | :--------------------------- | :----- | :------------------------------------------------ |
-| `CLOUDFLARE_API_TOKEN`       | CI/CD  | Cloudflare API Token（Worker 部署 + D1 读写权限） |
-| `CLOUDFLARE_ACCOUNT_ID`      | CI/CD  | Cloudflare Account ID                             |
-| `D1_DATABASE_ID`             | CI/CD  | D1 数据库 ID                                      |
-| `KV_NAMESPACE_ID`            | CI/CD  | KV 命名空间 ID                                    |
-| `BUCKET_NAME`                | CI/CD  | R2 存储桶名称                                     |
+| `CLOUDFLARE_API_TOKEN`       | 本地迁移 | 本地执行 `bun db:migrate` 时需要（D1 读写权限） |
+| `CLOUDFLARE_ACCOUNT_ID`      | 本地迁移 | 本地执行 D1 迁移/命令时的 Account ID              |
+| `D1_DATABASE_ID`             | 配置生成 | 仅 `bun run wrangler:prepare` 生成配置时使用      |
+| `KV_NAMESPACE_ID`            | 配置生成 | 仅 `bun run wrangler:prepare` 生成配置时使用      |
+| `BUCKET_NAME`                | 配置生成 | 仅 `bun run wrangler:prepare` 生成配置时使用      |
 | `BETTER_AUTH_SECRET`         | 运行时 | 会话加密密钥，运行 `openssl rand -hex 32` 生成    |
 | `BETTER_AUTH_URL`            | 运行时 | 应用 URL（如 `https://blog.example.com`）         |
 | `ADMIN_EMAIL`                | 运行时 | 管理员邮箱                                        |
@@ -207,13 +207,15 @@ Flare Stack Blog 的所有面向用户的页面与布局均通过 **主题契约
 | 变量名                    | 用途   | 说明                                                                                                      |
 | :------------------------ | :----- | :-------------------------------------------------------------------------------------------------------- |
 | `THEME`                   | 构建时 | 主题名称，默认 `default`，详见 [可用主题](#可用主题)                                                      |
+| `NODE_OPTIONS`            | 构建时 | 建议设为 `--max-old-space-size=6144`，避免 Cloudflare 构建 OOM                                            |
+| `BUN_VERSION`             | 构建时 | 固定为 `1.3.8`，与 `packageManager` 保持一致                                                              |
 | `TURNSTILE_SECRET_KEY`    | 运行时 | Cloudflare Turnstile 人机验证 Secret Key                                                                  |
 | `VITE_TURNSTILE_SITE_KEY` | 构建时 | Cloudflare Turnstile Site Key                                                                             |
 | `GITHUB_TOKEN`            | 运行时 | GitHub API Token（版本更新检查，避免限流）                                                                |
 | `LOCALE`                  | 运行时 | 默认语言，支持 `zh` / `en`，默认 `zh`；通知邮件、Webhook 文本和后台异步任务文案会使用该语言               |
 | `CDN_DOMAIN`              | 运行时 | 独立 CDN 域名（如 `cdn.example.com`），purge 时优先使用；须为当前 Zone 下通过 SaaS CNAME 接入的自定义域名 |
-| `ROUTE`                   | CI/CD  | 设为 `1` 时，GitHub Actions 部署自动改用 Cloudflare `routes` 模式                                        |
-| `ZONE_NAME`               | CI/CD  | 可选。仅在 `ROUTE=1` 且 Zone 不是从 `DOMAIN` 自动推导结果时填写                                           |
+| `ROUTE`                   | 配置生成 | 设为 `1` 时，`wrangler:prepare` 生成 `routes` 模式配置（Cloudflare Workers Builds 使用仓库内 `wrangler.jsonc`） |
+| `ZONE_NAME`               | 配置生成 | 可选。仅在 `wrangler:prepare` 的 routes 模式下手动覆盖 Zone 名                                              |
 | `PAGEVIEW_SALT`           | 运行时 | 浏览量统计的访客匿名化 salt，运行 `openssl rand -hex 16` 生成                                             |
 | `UMAMI_SRC`               | 运行时 | Umami 客户端埋点代理 URL（如 `https://cloud.umami.is`）                                                   |
 | `VITE_UMAMI_WEBSITE_ID`   | 构建时 | Umami Website ID（客户端埋点）                                                                            |
@@ -266,8 +268,11 @@ bun dev
 | :-------------- | :-------------------------- |
 | `bun dev`       | 启动开发服务器（端口 3000） |
 | `bun run build` | 构建生产版本                |
+| `bun run deploy` | 仅部署 Worker（不执行迁移） |
+| `bun run deploy:with-migrate` | 先安全迁移再部署（谨慎使用） |
+| `bun run wrangler:verify` | 校验 wrangler 配置与 Env 类型一致 |
 | `bun run test`  | 运行测试                    |
-| `bun lint`      | ESLint 检查                 |
+| `bun lint`      | Biome 代码检查              |
 | `bun check`     | 类型检查 + Lint + 格式化    |
 
 ### 数据库命令
@@ -279,6 +284,8 @@ bun dev
 | `bun db:migrate`  | 安全应用远程 D1 迁移，校验失败自动回滚 |
 | `bun db:migrate:local` | 安全应用本地 D1 迁移，校验失败自动恢复 |
 | `bun db:migrate:unsafe` | 直接应用远程 D1 迁移，不做校验 |
+
+> `bun run deploy` 不再自动执行迁移；有 schema 变更时请先手动运行 `bun db:migrate`，迁移成功后再部署 Worker。
 
 `bun db:migrate` / `bun db:migrate:local` 会复用 schema 中定义的状态常量，在迁移前后校验以下关键计数是否一致：
 
@@ -319,12 +326,15 @@ bun dev
 }
 ```
 
-使用仓库内置 GitHub Actions 部署时，不必手改 `wrangler.example.jsonc`：
+本仓库已移除 GitHub Actions 部署 workflow，部署统一通过 **Cloudflare Workers Builds**（连接 GitHub）完成：
 
-- 默认：`custom_domain`
-- 设置仓库变量 `ROUTE=1`：自动切到 `routes`
-- `pattern` 自动使用 `${DOMAIN}/*`
-- `zone_name` 默认从 `DOMAIN` 推导；如有子域单独托管场景，可额外设置 `ZONE_NAME`
+- 构建命令：`bun run build`
+- 部署命令：`bun run deploy`（**不会自动执行数据库迁移**）
+- 构建变量：`BUN_VERSION=1.3.8`、`NODE_OPTIONS=--max-old-space-size=6144`，以及可选的 `THEME` / `VITE_*`
+
+有 schema 变更时，请在部署前手动执行 `bun db:migrate`（详见 [部署指南](./docs/deployment-guide.en.md)）。
+
+仓库内提交的 `wrangler.jsonc` 是当前部署实际使用的配置，修改 binding 时需同步 `wrangler.example.jsonc`；CI 会通过 `bun run wrangler:verify` 检查两边是否一致。
 
 ## 贡献
 

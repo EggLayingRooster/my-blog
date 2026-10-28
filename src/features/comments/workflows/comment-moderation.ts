@@ -107,7 +107,7 @@ export class CommentModerationWorkflow extends WorkflowEntrypoint<Env, Params> {
       // Empty comment, mark as pending for manual review
       await step.do("mark empty comment as pending", async () => {
         const db = getDb(this.env);
-        await CommentService.updateCommentStatus(
+        await CommentService.updateCommentStatusIfVerifying(
           { db, env: this.env },
           commentId,
           "pending",
@@ -168,26 +168,32 @@ export class CommentModerationWorkflow extends WorkflowEntrypoint<Env, Params> {
       },
     );
 
-    // Step 3: Update comment status based on moderation result
-    await step.do("update comment status", async () => {
-      const db = getDb(this.env);
+    // Step 3: Update comment status based on moderation result.
+    // 条件更新（仅 verifying→目标状态）：并发/重复的 workflow 只有一个能更新成功，
+    // 后续通知也只由成功更新的一方发送，避免重复邮件。
+    const updatedComment = await step.do(
+      "update comment status",
+      async () => {
+        const db = getDb(this.env);
+        const status = moderationResult.safe ? "published" : "pending";
+        return await CommentService.updateCommentStatusIfVerifying(
+          { db, env: this.env },
+          commentId,
+          status,
+          moderationResult.reason,
+        );
+      },
+    );
 
-      if (moderationResult.safe) {
-        await CommentService.updateCommentStatus(
-          { db, env: this.env },
+    if (!updatedComment) {
+      console.log(
+        JSON.stringify({
+          message: "comment already processed by another workflow, skipping notifications",
           commentId,
-          "published",
-          moderationResult.reason,
-        );
-      } else {
-        await CommentService.updateCommentStatus(
-          { db, env: this.env },
-          commentId,
-          "pending",
-          moderationResult.reason,
-        );
-      }
-    });
+        }),
+      );
+      return;
+    }
 
     // Step 3.5: Notify admin when comment is flagged for review
     if (!moderationResult.safe) {

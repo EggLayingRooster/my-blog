@@ -16,7 +16,15 @@ export const Route = createFileRoute("/_public")({
   }),
   component: PublicLayout,
   headers: () => {
-    return CACHE_CONTROL.public;
+    // HTML 内容随 locale（Cookie / Accept-Language）变化，不能按 URL 共享缓存，
+    // 否则不同语言的访客会互相看到对方语言的页面（Cache API / CDN 都会串）。
+    // 这里让 HTML 只做浏览器端校验（max-age=0）并禁止 CDN 缓存；
+    // Worker 的 Cache API 也会在 cacheMiddleware 中跳过 text/html。
+    return {
+      ...CACHE_CONTROL.public,
+      "CDN-Cache-Control": "private, no-store",
+      Vary: "Cookie, Accept-Language",
+    };
   },
   head: ({ loaderData }) => ({
     links: (loaderData?.preloadImages ?? []).map((href) => ({

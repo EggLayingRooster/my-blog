@@ -20,11 +20,32 @@ export function isNotificationWebhookEventType(
   return NOTIFICATION_WEBHOOK_EVENTS.some((type) => type === event.type);
 }
 
+function isPrivateOrLocalHost(hostname: string): boolean {
+  const host = hostname.toLowerCase();
+  if (["localhost", "127.0.0.1", "0.0.0.0", "::1"].includes(host)) return true;
+  if (/^10\./.test(host)) return true;
+  if (/^127\./.test(host)) return true;
+  if (/^192\.168\./.test(host)) return true;
+  if (/^169\.254\./.test(host)) return true;
+  if (/^172\.(1[6-9]|2\d|3[01])\./.test(host)) return true;
+  return false;
+}
+
+const webhookUrlSchema = z.url().refine((value) => {
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" && !isPrivateOrLocalHost(url.hostname);
+  } catch {
+    return false;
+  }
+}, "Webhook URL must be a public HTTPS URL");
+
 export const webhookEndpointSchema = z.object({
   id: z.string(),
   name: z.string().min(1),
-  url: z.url(),
+  url: webhookUrlSchema,
   enabled: z.boolean(),
-  secret: z.string().min(1),
+  // HMAC 密钥过短容易被暴力破解/伪造签名
+  secret: z.string().min(16),
   events: z.array(notificationWebhookEventTypeSchema),
 });

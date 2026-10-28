@@ -1,5 +1,6 @@
 import { ArrowLeft, Keyboard, Loader2, Search } from "lucide-react";
 import { useEffect, useRef } from "react";
+import { escapeSearchHtml } from "@/features/search/utils/search.utils";
 import type { SearchPageProps } from "@/features/theme/contract/pages";
 import { m } from "@/paraglide/messages";
 
@@ -105,7 +106,9 @@ export function SearchPage({
                 viewTransitionName: `post-title-${result.post.slug}`,
               }}
               dangerouslySetInnerHTML={{
-                __html: result.matches.title || result.post.title,
+                __html:
+                  result.matches.title ||
+                  escapeSearchHtml(result.post.title),
               }}
             />
 
@@ -115,7 +118,9 @@ export function SearchPage({
               dangerouslySetInnerHTML={{
                 __html:
                   result.matches.summary ||
-                  result.post.summary ||
+                  (result.post.summary
+                    ? escapeSearchHtml(result.post.summary)
+                    : "") ||
                   result.matches.contentSnippet ||
                   "",
               }}

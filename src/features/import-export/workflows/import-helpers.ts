@@ -18,8 +18,9 @@ import {
 } from "@/features/import-export/utils/zip";
 import * as MediaRepo from "@/features/media/data/media.data";
 import {
+  detectImageMime,
   generateKey,
-  getContentTypeFromKey,
+  getExtensionForMime,
 } from "@/features/media/utils/media.utils";
 import { syncPostMedia } from "@/features/posts/data/post-media.data";
 import * as PostRepo from "@/features/posts/data/posts.data";
@@ -103,6 +104,7 @@ export async function importSinglePost(
   // 1. Parse content
   let contentJson: JSONContent | null = null;
   let metadata: Record<string, unknown> = {};
+  const uploadedMediaKeys: Array<string> = [];
 
   if (mode === "native") {
     const rawJson = readJsonFile<JSONContent>(
@@ -158,6 +160,7 @@ export async function importSinglePost(
           locale,
         );
         warnings.push(...imageResult.warnings);
+        uploadedMediaKeys.push(...imageResult.uploadedKeys);
 
         try {
           contentJson = await markdownToJsonContent(
@@ -198,6 +201,7 @@ export async function importSinglePost(
   if (contentJson && mode === "native") {
     const imageResult = await uploadImages(env, zipFiles, entry, locale);
     warnings.push(...imageResult.warnings);
+    uploadedMediaKeys.push(...imageResult.rewriteMap.values());
     if (imageResult.rewriteMap.size > 0) {
       contentJson = rewriteImagePaths(contentJson, imageResult.rewriteMap);
     }
@@ -230,34 +234,83 @@ export async function importSinglePost(
     }
   }
 
-  // 7. Insert post
-  const post = await PostRepo.insertPost(db, {
-    title,
-    slug,
-    summary: normalized.summary ?? null,
-    contentJson,
-    status: normalized.status === "draft" ? "draft" : "published",
-    readTimeInMinutes: normalized.readTimeInMinutes,
-    publishedAt: normalized.publishedAt
-      ? new Date(normalized.publishedAt)
-      : normalized.status !== "draft"
-        ? new Date()
-        : null,
-  });
+  // 7. Insert post + 8. tags + 9. media relationships：失败时回滚，避免留下"半成品文章"或孤儿媒体
+  let createdPost: Awaited<ReturnType<typeof PostRepo.insertPost>> | null = null;
+  try {
+    createdPost = await PostRepo.insertPost(db, {
+      title,
+      slug,
+      summary: normalized.summary ?? null,
+      contentJson,
+      status: normalized.status === "draft" ? "draft" : "published",
+      readTimeInMinutes: normalized.readTimeInMinutes,
+      publishedAt: normalized.publishedAt
+        ? new Date(normalized.publishedAt)
+        : normalized.status !== "draft"
+          ? new Date()
+          : null,
+    });
 
-  // 8. Link tags
-  if (tagIds.length > 0) {
-    await db
-      .insert(PostTagsTable)
-      .values(tagIds.map((tagId) => ({ postId: post.id, tagId })));
+    // 8. Link tags
+    if (tagIds.length > 0) {
+      await db
+        .insert(PostTagsTable)
+        .values(tagIds.map((tagId) => ({ postId: createdPost!.id, tagId })));
+    }
+
+    // 9. Sync post-media relationships
+    if (contentJson) {
+      await syncPostMedia(db, createdPost.id, contentJson);
+    }
+
+    return { title: createdPost.title, slug: createdPost.slug, warnings };
+  } catch (error) {
+    console.error(
+      JSON.stringify({
+        message: "import post failed, rolling back partial writes",
+        title,
+        slug,
+        error: error instanceof Error ? error.message : String(error),
+      }),
+    );
+    if (createdPost) {
+      await PostRepo.deletePost(db, createdPost.id).catch(() => undefined);
+    }
+    await cleanupImportedMedia(env, db, uploadedMediaKeys);
+    throw error;
   }
+}
 
-  // 9. Sync post-media relationships
-  if (contentJson) {
-    await syncPostMedia(db, post.id, contentJson);
+/** 导入失败时清理已上传的媒体（R2 + DB 记录），避免孤儿资源 */
+async function cleanupImportedMedia(
+  env: Env,
+  db: DB,
+  keys: Array<string>,
+): Promise<void> {
+  for (const key of keys) {
+    try {
+      await MediaRepo.deleteMedia(db, key);
+    } catch (error) {
+      console.error(
+        JSON.stringify({
+          message: "import rollback media record delete failed",
+          key,
+          error: error instanceof Error ? error.message : String(error),
+        }),
+      );
+    }
+    try {
+      await env.R2.delete(key);
+    } catch (error) {
+      console.error(
+        JSON.stringify({
+          message: "import rollback r2 delete failed",
+          key,
+          error: error instanceof Error ? error.message : String(error),
+        }),
+      );
+    }
   }
-
-  return { title: post.title, slug: post.slug, warnings };
 }
 
 // --- Image upload (needs env for R2) ---
@@ -279,10 +332,20 @@ export async function uploadImages(
     if (imageData.length === 0) continue;
 
     const oldKey = imagePath.slice(imagePrefix.length);
-    const newKey = generateKey(oldKey);
+    // 按文件头识别真实图片类型，避免导入伪装文件（与媒体上传保持一致）
+    const detectedMime = detectImageMime(imageData);
+    if (!detectedMime) {
+      warnings.push(
+        m.import_export_import_warning_image_upload_failed(
+          { name: oldKey },
+          { locale },
+        ),
+      );
+      continue;
+    }
+    const newKey = generateKey(oldKey, getExtensionForMime(detectedMime));
 
-    const mimeType =
-      getContentTypeFromKey(oldKey) || "application/octet-stream";
+    const mimeType = detectedMime;
 
     try {
       await env.R2.put(newKey, imageData, {
@@ -351,14 +414,19 @@ async function uploadMarkdownImages(
   markdown: string,
   mdDir: string,
   locale: Locale,
-): Promise<{ rewrittenMarkdown: string; warnings: Array<string> }> {
+): Promise<{
+  rewrittenMarkdown: string;
+  warnings: Array<string>;
+  uploadedKeys: Array<string>;
+}> {
   const warnings: Array<string> = [];
+  const uploadedKeys: Array<string> = [];
 
   const images = extractMarkdownImages(markdown);
   const relativeImages = images.filter((img) => img.type === "relative");
 
   if (relativeImages.length === 0) {
-    return { rewrittenMarkdown: markdown, warnings };
+    return { rewrittenMarkdown: markdown, warnings, uploadedKeys };
   }
 
   const rewriteMap = new Map<string, string>();
@@ -380,9 +448,18 @@ async function uploadMarkdownImages(
     if (imageData.length === 0) continue;
 
     const fileName = resolvedPath.split("/").pop() || resolvedPath;
-    const newKey = generateKey(fileName);
-    const mimeType =
-      getContentTypeFromKey(fileName) || "application/octet-stream";
+    const detectedMime = detectImageMime(imageData);
+    if (!detectedMime) {
+      warnings.push(
+        m.import_export_import_warning_image_upload_failed(
+          { name: img.original },
+          { locale },
+        ),
+      );
+      continue;
+    }
+    const newKey = generateKey(fileName, getExtensionForMime(detectedMime));
+    const mimeType = detectedMime;
 
     try {
       await env.R2.put(newKey, imageData, {
@@ -399,6 +476,7 @@ async function uploadMarkdownImages(
       });
 
       rewriteMap.set(img.original, `/images/${newKey}?quality=80`);
+      uploadedKeys.push(newKey);
     } catch (error) {
       console.error(
         JSON.stringify({
@@ -421,5 +499,5 @@ async function uploadMarkdownImages(
       ? rewriteMarkdownImagePaths(markdown, rewriteMap)
       : markdown;
 
-  return { rewrittenMarkdown, warnings };
+  return { rewrittenMarkdown, warnings, uploadedKeys };
 }

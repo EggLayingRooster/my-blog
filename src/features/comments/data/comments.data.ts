@@ -5,6 +5,17 @@ import type { CommentStatus } from "@/lib/db/schema";
 import { CommentsTable, PostsTable, user } from "@/lib/db/schema";
 
 const DEFAULT_PAGE_SIZE = 20;
+const MAX_PAGE_SIZE = 100;
+
+function clampPagination(
+  offset = 0,
+  limit = DEFAULT_PAGE_SIZE,
+): { safeOffset: number; safeLimit: number } {
+  return {
+    safeOffset: Math.max(0, Math.floor(offset)),
+    safeLimit: Math.min(MAX_PAGE_SIZE, Math.max(1, Math.floor(limit))),
+  };
+}
 
 export async function insertComment(
   db: DB,
@@ -31,6 +42,7 @@ export async function getRootCommentsByPostId(
   } = {},
 ) {
   const { offset = 0, limit = DEFAULT_PAGE_SIZE, status, viewerId } = options;
+  const { safeOffset, safeLimit } = clampPagination(offset, limit);
 
   const conditions = buildCommentWhereClause({
     postId,
@@ -62,8 +74,8 @@ export async function getRootCommentsByPostId(
     .leftJoin(user, eq(CommentsTable.userId, user.id))
     .where(conditions)
     .orderBy(desc(CommentsTable.createdAt))
-    .limit(Math.min(limit, 100))
-    .offset(offset);
+    .limit(safeLimit)
+    .offset(safeOffset);
 
   return comments;
 }
@@ -131,6 +143,7 @@ export async function getRepliesByRootId(
   } = {},
 ) {
   const { offset = 0, limit = DEFAULT_PAGE_SIZE, status, viewerId } = options;
+  const { safeOffset, safeLimit } = clampPagination(offset, limit);
 
   const conditions = buildCommentWhereClause({
     postId,
@@ -162,8 +175,8 @@ export async function getRepliesByRootId(
     .leftJoin(user, eq(CommentsTable.userId, user.id))
     .where(conditions)
     .orderBy(CommentsTable.createdAt)
-    .limit(Math.min(limit, 100))
-    .offset(offset);
+    .limit(safeLimit)
+    .offset(safeOffset);
 
   // Fetch replyTo user info separately for each reply
   const repliesWithReplyTo = await Promise.all(
@@ -237,6 +250,7 @@ export async function getCommentsByUserId(
   } = {},
 ) {
   const { offset = 0, limit = DEFAULT_PAGE_SIZE, status } = options;
+  const { safeOffset, safeLimit } = clampPagination(offset, limit);
 
   const conditions = buildCommentWhereClause({ userId, status });
 
@@ -245,8 +259,8 @@ export async function getCommentsByUserId(
     .from(CommentsTable)
     .where(conditions)
     .orderBy(desc(CommentsTable.createdAt))
-    .limit(Math.min(limit, 100))
-    .offset(offset);
+    .limit(safeLimit)
+    .offset(safeOffset);
 
   return comments;
 }
@@ -270,6 +284,8 @@ export async function getAllComments(
     userId,
     userName,
   } = options;
+
+  const { safeOffset, safeLimit } = clampPagination(offset, limit);
 
   const conditions = buildCommentWhereClause({ status, postId, userId });
   const finalConditions = userName
@@ -316,8 +332,8 @@ export async function getAllComments(
     .leftJoin(parentUser, eq(parentComment.userId, parentUser.id))
     .where(finalConditions)
     .orderBy(desc(CommentsTable.createdAt))
-    .limit(Math.min(limit, 100))
-    .offset(offset);
+    .limit(safeLimit)
+    .offset(safeOffset);
 
   return comments;
 }
@@ -364,6 +380,29 @@ export async function updateComment(
 
 export async function deleteComment(db: DB, id: number) {
   await db.delete(CommentsTable).where(eq(CommentsTable.id, id));
+}
+
+/**
+ * 仅在评论仍处于 verifying 时更新状态。
+ * 用于审核 workflow 的幂等/并发控制：返回 null 说明已被其他实例处理。
+ */
+export async function updateCommentStatusIfVerifying(
+  db: DB,
+  id: number,
+  status: CommentStatus,
+  aiReason?: string,
+) {
+  const [comment] = await db
+    .update(CommentsTable)
+    .set({ status, aiReason })
+    .where(
+      and(
+        eq(CommentsTable.id, id),
+        eq(CommentsTable.status, "verifying"),
+      ),
+    )
+    .returning();
+  return comment ?? null;
 }
 
 export async function getUserCommentStats(db: DB, userId: string) {

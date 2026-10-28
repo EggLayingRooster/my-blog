@@ -1,4 +1,4 @@
-import { ClientOnly, Link } from "@tanstack/react-router";
+import { Link } from "@tanstack/react-router";
 import {
   CheckCircle2,
   Clock,
@@ -12,6 +12,7 @@ import type {
   MyFriendLink,
   SubmitFriendLinkPageProps,
 } from "@/features/theme/contract/pages";
+import { formatDate } from "@/lib/utils";
 import { m } from "@/paraglide/messages";
 
 function StatusBadge({ status }: { status: MyFriendLink["status"] }) {
@@ -233,9 +234,9 @@ export function SubmitFriendLinkPage({
 
                   <div className="text-[10px] fuwari-text-30 text-right mt-2 transition-colors">
                     {m.friend_link_submitted_at()}{" "}
-                    <ClientOnly fallback="-">
-                      {new Date(link.createdAt).toLocaleDateString()}
-                    </ClientOnly>
+                    
+                      {formatDate(link.createdAt)}
+                    
                   </div>
                 </div>
               ))

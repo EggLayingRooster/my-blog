@@ -1,4 +1,3 @@
-import { ClientOnly } from "@tanstack/react-router";
 import { memo, useMemo } from "react";
 import type { CommentWithUser } from "@/features/comments/comments.schema";
 import { authClient } from "@/lib/auth/auth.client";
@@ -110,9 +109,9 @@ export const FuwariCommentItem = memo(
               )}
             </div>
             <span className="text-xs fuwari-text-30">
-              <ClientOnly fallback="-">
+              
                 {formatDate(comment.createdAt, { includeTime: true })}
-              </ClientOnly>
+              
             </span>
           </div>
 

@@ -145,15 +145,30 @@ export const turnstileMiddleware = createMiddleware({ type: "function" })
     });
   })
   .server(async ({ next, context }) => {
-    const secretKey = serverEnv(context.env).TURNSTILE_SECRET_KEY;
-    if (!secretKey) return next(); // 未配置则跳过验证
+    const env = serverEnv(context.env);
+    const secretKey = env.TURNSTILE_SECRET_KEY;
+    const isProduction = env.ENVIRONMENT !== "dev" && env.ENVIRONMENT !== "test";
+    if (!secretKey) {
+      if (isProduction) {
+        console.error(
+          JSON.stringify({
+            message: "turnstile secret missing in production, verification skipped",
+          }),
+        );
+      }
+      return next();
+    }
 
     const token = getRequestHeader("X-Turnstile-Token");
     if (!token) {
       throw createTurnstileError("MISSING_TOKEN");
     }
 
-    const result = await verifyTurnstileToken({ secretKey, token });
+    const result = await verifyTurnstileToken({
+      secretKey,
+      token,
+      expectedHostname: isProduction ? env.DOMAIN : undefined,
+    });
 
     if (!result.success) {
       throw createTurnstileError("VERIFY_FAILED");

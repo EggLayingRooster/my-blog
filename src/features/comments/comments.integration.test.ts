@@ -98,9 +98,12 @@ describe("Comments Integration", () => {
 
         expect(
           userContext.env.COMMENT_MODERATION_WORKFLOW.create,
-        ).toHaveBeenCalledWith({
-          params: { commentId: comment.id },
-        });
+        ).toHaveBeenCalledWith(
+          expect.objectContaining({
+            id: `comment-moderation-${comment.id}`,
+            params: { commentId: comment.id },
+          }),
+        );
       });
 
       it("should create a reply to an existing comment", async () => {

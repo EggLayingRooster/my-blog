@@ -68,9 +68,24 @@ export function getAuth({ db, env }: { db: DB; env: Env }) {
           typeof ctx.body?.email === "string" ? ctx.body.email.trim() : "";
         if (!email) return;
 
+        // 禁止公开注册管理员邮箱：否则攻击者可抢注该邮箱（未验证即拥有 admin role），
+        // 造成管理员账号被占用，或诱导邮箱真实主人点击验证链接完成“账号预劫持”。
+        if (email.toLowerCase() === ADMIN_EMAIL.toLowerCase()) {
+          throw APIError.from("BAD_REQUEST", {
+            code: "ADMIN_EMAIL_SIGNUP_FORBIDDEN",
+            message: "This email cannot be used for public sign up",
+          });
+        }
+
         const allowed = await checkEmailRateLimit(env, "email-signup", email);
         if (allowed) return;
 
+        console.error(
+          JSON.stringify({
+            message: "email signup rate limited",
+            email,
+          }),
+        );
         throw APIError.from("BAD_REQUEST", {
           code: "RATE_LIMITED",
           message: "Too many sign up attempts",
@@ -86,13 +101,21 @@ export function getAuth({ db, env }: { db: DB; env: Env }) {
           getPasswordHasher().verify(params),
       },
       sendResetPassword: async ({ user, url }) => {
-        // Per-email rate limit: 3 per hour — silently skip if exceeded
+        // Per-email rate limit: 3 per hour
         const allowed = await checkEmailRateLimit(
           env,
           "email-reset",
           user.email,
         );
-        if (!allowed) return;
+        if (!allowed) {
+          console.error(
+            JSON.stringify({
+              message: "reset password email rate limited",
+              email: user.email,
+            }),
+          );
+          return;
+        }
 
         const locale = getAuthEmailLocale();
         const emailHtml = renderToStaticMarkup(
@@ -117,7 +140,15 @@ export function getAuth({ db, env }: { db: DB; env: Env }) {
           "email-verify",
           user.email,
         );
-        if (!allowed) return;
+        if (!allowed) {
+          console.error(
+            JSON.stringify({
+              message: "verification email rate limited",
+              email: user.email,
+            }),
+          );
+          return;
+        }
 
         const locale = getAuthEmailLocale();
         const emailHtml = renderToStaticMarkup(
@@ -133,7 +164,7 @@ export function getAuth({ db, env }: { db: DB; env: Env }) {
           },
         });
       },
-      autoSignInAfterVerification: true,
+      autoSignInAfterVerification: false,
     },
     database: drizzleAdapter(db, {
       provider: "sqlite",
@@ -143,7 +174,13 @@ export function getAuth({ db, env }: { db: DB; env: Env }) {
       user: {
         create: {
           before: async (user) => {
-            if (user.email === ADMIN_EMAIL) {
+            // 大小写不敏感；仅用于 GitHub 等已由第三方验证邮箱的社交注册。
+            // 邮箱密码注册已在上方 before hook 禁止使用 ADMIN_EMAIL。
+            const email =
+              typeof user.email === "string"
+                ? user.email.toLowerCase()
+                : undefined;
+            if (email === ADMIN_EMAIL.toLowerCase()) {
               return { data: { ...user, role: "admin" } };
             }
             return { data: user };

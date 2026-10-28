@@ -55,16 +55,16 @@ export function PostPage({ post }: PostPageProps) {
             <div className="flex flex-wrap items-center gap-4 text-xs font-mono text-muted-foreground/60 tracking-wider">
               <span className="flex items-center gap-1.5">
                 {m.post_published_at()}:{" "}
-                <ClientOnly fallback={<span>-</span>}>
+                
                   {formatDate(post.publishedAt)}
-                </ClientOnly>
+                
               </span>
               <span className="opacity-30">/</span>
               <span className="flex items-center gap-1.5">
                 {m.post_last_updated()}:{" "}
-                <ClientOnly fallback={<span>-</span>}>
+                
                   {formatDate(post.updatedAt)}
-                </ClientOnly>
+                
               </span>
               <span className="opacity-30">/</span>
               <span>{m.read_time({ count: post.readTimeInMinutes })}</span>
@@ -191,19 +191,4 @@ export function PostPage({ post }: PostPageProps) {
       </div>
     </div>
   );
-}
-
-// Import ClientOnly inline to avoid circular dependency
-function ClientOnly({
-  children,
-  fallback,
-}: {
-  children: React.ReactNode;
-  fallback: React.ReactNode;
-}) {
-  const [isMounted, setIsMounted] = useState(false);
-  useEffect(() => {
-    setIsMounted(true);
-  }, []);
-  return <>{isMounted ? children : fallback}</>;
 }

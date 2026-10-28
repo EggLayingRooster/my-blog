@@ -5,6 +5,23 @@ import type { Messages } from "@/lib/i18n";
 
 const coercedDate = z.union([z.date(), z.string().pipe(z.coerce.date())]);
 
+const HTTP_PROTOCOLS = new Set(["http:", "https:"]);
+
+/** 友链只允许 http/https：z.url() 会接受 javascript:/data: 等协议，直接渲染成 href 会有 XSS 风险 */
+export function isSafeHttpUrl(value: string): boolean {
+  try {
+    return HTTP_PROTOCOLS.has(new URL(value).protocol);
+  } catch {
+    return false;
+  }
+}
+
+const createSafeUrlSchema = (message?: string) =>
+  z
+    .string()
+    .url(message)
+    .refine(isSafeHttpUrl, message ?? "URL must use http or https");
+
 export const FriendLinkSelectSchema = createSelectSchema(FriendLinksTable, {
   createdAt: coercedDate,
   updatedAt: coercedDate,
@@ -20,13 +37,26 @@ export const FriendLinkWithUserSchema = FriendLinkSelectSchema.extend({
   user: FriendLinkUserSchema.nullable(),
 });
 
+// 公开接口只暴露展示所需字段，避免泄露 contactEmail 等提交者隐私信息
+export const FriendLinkPublicSchema = FriendLinkSelectSchema.pick({
+  id: true,
+  siteName: true,
+  siteUrl: true,
+  description: true,
+  logoUrl: true,
+}).extend({
+  user: FriendLinkUserSchema.nullable(),
+});
+
 // === User submission input ===
 
 export const SubmitFriendLinkInputSchema = z.object({
   siteName: z.string().min(1).max(100),
-  siteUrl: z.string().url(),
+  siteUrl: createSafeUrlSchema(),
   description: z.string().max(300).optional(),
-  logoUrl: z.union([z.literal(""), z.string().url()]).optional(),
+  logoUrl: z
+    .union([z.literal(""), createSafeUrlSchema()])
+    .optional(),
   contactEmail: z.string().email(),
 });
 
@@ -36,7 +66,7 @@ export const createSubmitFriendLinkSchema = (m: Messages) =>
       .string()
       .min(1, m.friend_link_validation_required())
       .max(100, m.friend_link_validation_too_long({ max: 100 })),
-    siteUrl: z.string().url(m.friend_link_validation_invalid_url()),
+    siteUrl: createSafeUrlSchema(m.friend_link_validation_invalid_url()),
     description: z
       .string()
       .max(300, m.friend_link_validation_too_long({ max: 300 }))
@@ -44,7 +74,7 @@ export const createSubmitFriendLinkSchema = (m: Messages) =>
     logoUrl: z
       .union([
         z.literal(""),
-        z.string().url(m.friend_link_validation_invalid_url()),
+        createSafeUrlSchema(m.friend_link_validation_invalid_url()),
       ])
       .optional(),
     contactEmail: z.string().email(m.friend_link_validation_invalid_email()),
@@ -54,9 +84,9 @@ export const createSubmitFriendLinkSchema = (m: Messages) =>
 
 export const CreateFriendLinkInputSchema = z.object({
   siteName: z.string().min(1).max(100),
-  siteUrl: z.string().url(),
+  siteUrl: createSafeUrlSchema(),
   description: z.string().max(300).optional(),
-  logoUrl: z.union([z.literal(""), z.string().url()]).optional(),
+  logoUrl: z.union([z.literal(""), createSafeUrlSchema()]).optional(),
   contactEmail: z.union([z.literal(""), z.string().email()]).optional(),
 });
 
@@ -66,7 +96,7 @@ export const createCreateFriendLinkSchema = (m: Messages) =>
       .string()
       .min(1, m.friend_link_validation_required())
       .max(100, m.friend_link_validation_too_long({ max: 100 })),
-    siteUrl: z.string().url(m.friend_link_validation_invalid_url()),
+    siteUrl: createSafeUrlSchema(m.friend_link_validation_invalid_url()),
     description: z
       .string()
       .max(300, m.friend_link_validation_too_long({ max: 300 }))
@@ -74,7 +104,7 @@ export const createCreateFriendLinkSchema = (m: Messages) =>
     logoUrl: z
       .union([
         z.literal(""),
-        z.string().url(m.friend_link_validation_invalid_url()),
+        createSafeUrlSchema(m.friend_link_validation_invalid_url()),
       ])
       .optional(),
     contactEmail: z
@@ -113,9 +143,9 @@ export const createRejectFriendLinkSchema = (m: Messages) =>
 export const UpdateFriendLinkInputSchema = z.object({
   id: z.number(),
   siteName: z.string().min(1).max(100).optional(),
-  siteUrl: z.string().url().optional(),
+  siteUrl: createSafeUrlSchema().optional(),
   description: z.string().max(300).optional(),
-  logoUrl: z.union([z.literal(""), z.string().url()]).optional(),
+  logoUrl: z.union([z.literal(""), createSafeUrlSchema()]).optional(),
   contactEmail: z.union([z.literal(""), z.string().email()]).optional(),
 });
 
@@ -127,7 +157,7 @@ export const createUpdateFriendLinkSchema = (m: Messages) =>
       .min(1, m.friend_link_validation_required())
       .max(100, m.friend_link_validation_too_long({ max: 100 }))
       .optional(),
-    siteUrl: z.string().url(m.friend_link_validation_invalid_url()).optional(),
+    siteUrl: createSafeUrlSchema(m.friend_link_validation_invalid_url()).optional(),
     description: z
       .string()
       .max(300, m.friend_link_validation_too_long({ max: 300 }))
@@ -135,7 +165,7 @@ export const createUpdateFriendLinkSchema = (m: Messages) =>
     logoUrl: z
       .union([
         z.literal(""),
-        z.string().url(m.friend_link_validation_invalid_url()),
+        createSafeUrlSchema(m.friend_link_validation_invalid_url()),
       ])
       .optional(),
     contactEmail: z
@@ -151,9 +181,7 @@ export const DeleteFriendLinkInputSchema = z.object({
 });
 
 // === Cache ===
-export const ApprovedFriendLinksResponseSchema = z.array(
-  FriendLinkWithUserSchema,
-);
+export const ApprovedFriendLinksResponseSchema = z.array(FriendLinkPublicSchema);
 
 export const FRIEND_LINKS_CACHE_KEYS = {
   approvedList: (version: string) =>
@@ -172,4 +200,5 @@ export type ApproveFriendLinkInput = z.infer<
 export type RejectFriendLinkInput = z.infer<typeof RejectFriendLinkInputSchema>;
 export type UpdateFriendLinkInput = z.infer<typeof UpdateFriendLinkInputSchema>;
 export type DeleteFriendLinkInput = z.infer<typeof DeleteFriendLinkInputSchema>;
+export type FriendLinkPublic = z.infer<typeof FriendLinkPublicSchema>;
 export type FriendLinkWithUser = z.infer<typeof FriendLinkWithUserSchema>;

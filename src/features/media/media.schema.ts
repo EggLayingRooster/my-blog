@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { Messages } from "@/lib/i18n";
+import { isValidMediaKey } from "./utils/media.utils";
 
 export const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
 export const ACCEPTED_IMAGE_TYPES = [
@@ -35,6 +36,10 @@ export function assertMediaKey(key: string, messages: Messages) {
   const trimmedKey = key.trim();
   if (trimmedKey.length === 0) {
     throw new Error(messages.media_validation_key_required());
+  }
+  // 只允许 UUID 文件名或 asset/ 前缀，避免 admin 接口越界操作其它 R2 对象
+  if (!isValidMediaKey(trimmedKey)) {
+    throw new Error("Invalid media key");
   }
 
   return trimmedKey;

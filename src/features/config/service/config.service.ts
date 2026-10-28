@@ -201,10 +201,30 @@ export async function uploadSiteAsset(
   context: { env: Env },
   input: { file: File; assetPath: string },
 ): Promise<{ url: string }> {
+  const mime = input.file.type.toLowerCase();
+  const isSvgOrIcon =
+    mime.includes("svg") ||
+    mime.includes("icon") ||
+    /\.(svg|ico)$/i.test(input.file.name);
+
+  // 非 SVG/ICO 的资源按文件头校验真实类型，避免伪装文件落到同源资源路径
+  let detectedMime: string | null = null;
+  if (!isSvgOrIcon) {
+    const { detectImageMime } = await import(
+      "@/features/media/utils/media.utils"
+    );
+    const bytes = new Uint8Array(await input.file.arrayBuffer());
+    detectedMime = detectImageMime(bytes);
+    if (!detectedMime) {
+      throw new Error("Invalid image file");
+    }
+  }
+
   const { url } = await Storage.putSiteAsset(
     context.env,
     input.file,
     input.assetPath,
+    detectedMime ? { contentType: detectedMime } : undefined,
   );
 
   const timestamp = Math.floor(Date.now() / 1000);

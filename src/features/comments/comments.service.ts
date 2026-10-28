@@ -77,10 +77,43 @@ export async function getRepliesByRootId(
 
 // ============ Authed User Service Methods ============
 
+const MAX_COMMENT_CONTENT_BYTES = 20_000;
+
 export async function createComment(
   context: AuthContext & { executionCtx: ExecutionContext },
   data: CreateCommentInput,
 ) {
+  const isAdmin = context.session.user.role === "admin";
+
+  // 校验文章存在且已发布（管理员可对草稿评论，其余用户只允许已到发布时间的文章）
+  const post = await PostService.findPostById(context, {
+    id: data.postId,
+  });
+  if (!post) {
+    return err({ reason: "POST_NOT_FOUND" });
+  }
+  const postReachedPublishTime =
+    post.status === "published" &&
+    (!post.publishedAt || post.publishedAt.getTime() <= Date.now());
+  if (!isAdmin && !postReachedPublishTime) {
+    return err({ reason: "POST_NOT_PUBLISHED" });
+  }
+
+  // 限制评论体积，避免超大 JSON 占满存储/渲染
+  if (JSON.stringify(data.content).length > MAX_COMMENT_CONTENT_BYTES) {
+    return err({ reason: "COMMENT_TOO_LARGE" });
+  }
+
+  // 只有已发布评论、自己的评论（未删除）或管理员可见；避免回复他人不可见评论
+  const canSeeComment = (comment: {
+    status: string;
+    userId: string | null;
+  }) =>
+    isAdmin ||
+    comment.status === "published" ||
+    (comment.status !== "deleted" &&
+      comment.userId === context.session.user.id);
+
   // Validation: ensure 2-level structure
   let rootId: number | null = null;
   let replyToCommentId: number | null = null;
@@ -91,7 +124,7 @@ export async function createComment(
       context.db,
       data.rootId,
     );
-    if (!rootComment) {
+    if (!rootComment || !canSeeComment(rootComment)) {
       return err({ reason: "ROOT_COMMENT_NOT_FOUND" });
     }
     if (rootComment.rootId !== null) {
@@ -108,7 +141,7 @@ export async function createComment(
         context.db,
         data.replyToCommentId,
       );
-      if (!replyToComment) {
+      if (!replyToComment || !canSeeComment(replyToComment)) {
         return err({ reason: "REPLY_TO_COMMENT_NOT_FOUND" });
       }
       // replyToComment must be either the root or a reply under the same root
@@ -127,8 +160,6 @@ export async function createComment(
       return err({ reason: "ROOT_COMMENT_CANNOT_HAVE_REPLY_TO" });
     }
   }
-
-  const isAdmin = context.session.user.role === "admin";
 
   const comment = await CommentRepo.insertComment(context.db, {
     postId: data.postId,
@@ -320,11 +351,28 @@ export async function startCommentModerationWorkflow(
   context: DbContext,
   data: StartCommentModerationInput,
 ) {
-  await context.env.COMMENT_MODERATION_WORKFLOW.create({
-    params: {
-      commentId: data.commentId,
-    },
-  });
+  // 使用稳定实例 id：同一条评论不会因为重复调用/重试产生并行审核
+  try {
+    await context.env.COMMENT_MODERATION_WORKFLOW.create({
+      id: `comment-moderation-${data.commentId}`,
+      params: {
+        commentId: data.commentId,
+      },
+    });
+  } catch (error) {
+    console.error(
+      JSON.stringify({
+        message: "comment moderation workflow create failed, retry without id",
+        commentId: data.commentId,
+        error: error instanceof Error ? error.message : String(error),
+      }),
+    );
+    await context.env.COMMENT_MODERATION_WORKFLOW.create({
+      params: {
+        commentId: data.commentId,
+      },
+    });
+  }
 }
 
 export async function findCommentById(context: DbContext, commentId: number) {
@@ -341,6 +389,24 @@ export async function updateCommentStatus(
     status,
     aiReason,
   });
+}
+
+/**
+ * 审核专用：仅当评论仍为 verifying 时更新，返回 null 表示已被其他流程处理。
+ * 用于避免重复审核通知/回复通知。
+ */
+export async function updateCommentStatusIfVerifying(
+  context: DbContext,
+  commentId: number,
+  status: "published" | "pending" | "deleted",
+  aiReason?: string,
+) {
+  return await CommentRepo.updateCommentStatusIfVerifying(
+    context.db,
+    commentId,
+    status,
+    aiReason,
+  );
 }
 
 export async function getUserCommentStats(context: DbContext, userId: string) {

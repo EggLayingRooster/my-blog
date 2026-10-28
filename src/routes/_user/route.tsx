@@ -1,5 +1,5 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { createFileRoute, Outlet, useNavigate } from "@tanstack/react-router";
+import { createFileRoute, Outlet, redirect, useNavigate } from "@tanstack/react-router";
 import theme from "@theme";
 import { useEffect } from "react";
 import { toast } from "sonner";
@@ -11,8 +11,14 @@ import { CACHE_CONTROL } from "@/lib/constants";
 import { m } from "@/paraglide/messages";
 
 export const Route = createFileRoute("/_user")({
-  loader: async ({ context }) => {
+  loader: async ({ context, location }) => {
     const session = await context.queryClient.fetchQuery(sessionQuery);
+    if (!session) {
+      throw redirect({
+        to: "/login",
+        search: { redirectTo: `${location.pathname}${location.search}` },
+      });
+    }
     return { session };
   },
   component: UserLayout,

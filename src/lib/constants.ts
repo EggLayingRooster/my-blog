@@ -6,6 +6,9 @@ export const POSTS_PAGE_SIZE = 12;
 /** 公开列表/详情单页最多返回条数（防止匿名请求用超大/负数 limit 拖库或刷缓存） */
 export const MAX_POSTS_PAGE_SIZE = 50;
 
+/** 站点展示时区：SSR 与客户端使用同一时区格式化日期，避免 hydration 不一致 */
+export const SITE_TIME_ZONE = "Asia/Shanghai";
+
 /** 本模块（数据与缓存）使用的 TTL，集中管理避免魔法值散落 */
 export const CACHE_TTL = {
   postsList: "7d",

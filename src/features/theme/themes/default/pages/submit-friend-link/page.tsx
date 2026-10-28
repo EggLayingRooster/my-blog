@@ -1,4 +1,4 @@
-import { ClientOnly, Link } from "@tanstack/react-router";
+import { Link } from "@tanstack/react-router";
 import { ExternalLink, Terminal } from "lucide-react";
 import type { SubmitFriendLinkPageProps } from "@/features/theme/contract/pages/friend-links";
 import { formatDate } from "@/lib/utils";
@@ -79,9 +79,9 @@ export function SubmitFriendLinkPage(props: SubmitFriendLinkPageProps) {
                     )}
                   </div>
                   <div className="text-[10px] font-mono text-muted-foreground shrink-0 ml-4">
-                    <ClientOnly fallback="-">
-                      {formatDate(link.createdAt).split(" ")[0]}
-                    </ClientOnly>
+                    
+                      {formatDate(link.createdAt)}
+                    
                   </div>
                 </div>
               ))}

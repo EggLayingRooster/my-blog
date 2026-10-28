@@ -1,5 +1,5 @@
 import { useSuspenseQuery } from "@tanstack/react-query";
-import { ClientOnly, Link } from "@tanstack/react-router";
+import { Link } from "@tanstack/react-router";
 import { Skeleton } from "@/components/ui/skeleton";
 import { relatedPostsQuery } from "@/features/posts/queries";
 import { formatDate } from "@/lib/utils";
@@ -42,9 +42,9 @@ export function RelatedPosts({ slug }: RelatedPostsProps) {
 
               <div className="flex items-center gap-3 fuwari-text-50 text-xs">
                 <span>
-                  <ClientOnly fallback="-">
+                  
                     {formatDate(post.publishedAt)}
-                  </ClientOnly>
+                  
                 </span>
                 <span className="w-1 h-1 rounded-full bg-black/20 dark:bg-white/20" />
                 <span>{m.read_time({ count: post.readTimeInMinutes })}</span>

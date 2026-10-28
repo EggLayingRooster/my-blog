@@ -1,5 +1,5 @@
 import { useSuspenseQuery } from "@tanstack/react-query";
-import { ClientOnly, Link } from "@tanstack/react-router";
+import { Link } from "@tanstack/react-router";
 import { ArrowRight } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { relatedPostsQuery } from "@/features/posts/queries";
@@ -37,9 +37,9 @@ export function RelatedPosts({ slug }: RelatedPostsProps) {
           >
             <div className="flex items-center gap-2 text-[10px] text-muted-foreground/60 font-mono tracking-wider">
               <span>
-                <ClientOnly fallback="-">
+                
                   {formatDate(post.publishedAt)}
-                </ClientOnly>
+                
               </span>
               <span className="opacity-30">/</span>
               <span>{m.read_time({ count: post.readTimeInMinutes })}</span>

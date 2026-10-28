@@ -13,7 +13,7 @@ import packageJson from "./package.json";
 import { themeNames, themes } from "./src/features/theme/registry";
 
 const buildEnvSchema = z.object({
-  THEME: z.enum(themeNames).catch("default"),
+  THEME: z.enum(themeNames).optional().default("default"),
 });
 
 const config = defineConfig(({ mode }) => {
