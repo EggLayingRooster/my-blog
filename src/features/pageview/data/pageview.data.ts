@@ -64,10 +64,32 @@ export async function getTrafficTrend(
     .groupBy(sql`bucket`)
     .orderBy(sql`bucket`);
 
-  return rows.map((r) => ({
-    date: Number(r.bucket) * 1000, // unix seconds → ms
-    views: r.views,
-  }));
+  const stepSeconds = unit === "hour" ? 3600 : 86400;
+
+  const byBucket = new Map<number, number>();
+  for (const row of rows) {
+    byBucket.set(Number(row.bucket), row.views);
+  }
+
+  // 补齐没有数据的时间桶：只有一个数据点时前端折线/面积图画不出来
+  const startBucket =
+    Math.floor(startAt.getTime() / 1000 / stepSeconds) * stepSeconds;
+  const endBucket =
+    Math.floor(endAt.getTime() / 1000 / stepSeconds) * stepSeconds;
+
+  const trend: Array<{ date: number; views: number }> = [];
+  for (
+    let bucket = startBucket;
+    bucket <= endBucket;
+    bucket += stepSeconds
+  ) {
+    trend.push({
+      date: bucket * 1000, // unix seconds → ms
+      views: byBucket.get(bucket) ?? 0,
+    });
+  }
+
+  return trend;
 }
 
 /**
