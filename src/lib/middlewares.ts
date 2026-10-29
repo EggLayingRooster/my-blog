@@ -149,12 +149,14 @@ export const turnstileMiddleware = createMiddleware({ type: "function" })
     const secretKey = env.TURNSTILE_SECRET_KEY;
     const isProduction = env.ENVIRONMENT !== "dev" && env.ENVIRONMENT !== "test";
     if (!secretKey) {
+      // 生产环境 fail-closed：缺少 secret 不能静默放行
       if (isProduction) {
         console.error(
           JSON.stringify({
-            message: "turnstile secret missing in production, verification skipped",
+            message: "turnstile secret missing in production, rejecting request",
           }),
         );
+        throw createTurnstileError("VERIFY_FAILED");
       }
       return next();
     }

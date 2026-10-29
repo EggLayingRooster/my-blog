@@ -1,16 +1,74 @@
 import { blogConfig } from "@/blog.config";
 import * as CacheService from "@/features/cache/cache.service";
+import { CACHE_NAMESPACES } from "@/features/cache/types";
 import type { SiteConfig, SystemConfig } from "@/features/config/config.schema";
 import {
   CONFIG_CACHE_KEYS,
   DEFAULT_CONFIG,
   SystemConfigSchema,
 } from "@/features/config/config.schema";
+import { recordAdminAudit } from "@/features/admin-audit/service/admin-audit.service";
 import * as ConfigRepo from "@/features/config/data/config.data";
-import { FullSiteConfigSchema } from "@/features/config/site-config.schema";
+import {
+  isIcoAsset,
+  isSafeSvgAsset,
+} from "@/features/config/config.asset.schema";
+import { FullSiteConfigSchema, SocialLinkSchema } from "@/features/config/site-config.schema";
 import type { SocialLink } from "@/features/config/utils/social-platforms";
 import * as Storage from "@/features/media/data/media.storage";
 import { purgeSiteCDNCache } from "@/lib/invalidate";
+
+export const SECRET_MASK = "****************";
+
+export function maskSystemConfigSecrets(config: SystemConfig): SystemConfig {
+  const masked = structuredClone(config);
+  if (masked.email) {
+    if (masked.email.password) masked.email.password = SECRET_MASK;
+    if (masked.email.apiKey) masked.email.apiKey = SECRET_MASK;
+  }
+  if (masked.notification?.webhooks) {
+    masked.notification.webhooks = masked.notification.webhooks.map(
+      (webhook) => ({
+        ...webhook,
+        secret: webhook.secret ? SECRET_MASK : webhook.secret,
+      }),
+    );
+  }
+  return masked;
+}
+
+export function restoreMaskedSecrets(
+  patch: SystemConfig,
+  current: SystemConfig | null | undefined,
+): SystemConfig {
+  const restored = structuredClone(patch);
+  if (restored.email) {
+    if (restored.email.password === SECRET_MASK) {
+      restored.email.password = current?.email?.password ?? "";
+    }
+    if (restored.email.apiKey === SECRET_MASK) {
+      restored.email.apiKey = current?.email?.apiKey ?? "";
+    }
+  }
+  if (restored.notification?.webhooks) {
+    const currentById = new Map(
+      (current?.notification?.webhooks ?? []).map((webhook) => [
+        webhook.id,
+        webhook,
+      ]),
+    );
+    restored.notification.webhooks = restored.notification.webhooks.map(
+      (webhook) =>
+        webhook.secret === SECRET_MASK
+          ? {
+              ...webhook,
+              secret: currentById.get(webhook.id)?.secret ?? webhook.secret,
+            }
+          : webhook,
+    );
+  }
+  return restored;
+}
 
 const DEFAULT_SMTP_PORT = 465;
 const RESEND_SMTP_HOST = "smtp.resend.com";
@@ -63,6 +121,37 @@ export function resolveSystemConfig(
   };
 }
 
+/**
+ * 深合并配置：数组整体替换，对象逐层合并。
+ * 用于把 API 的 partial patch 合并到当前 DB 配置，避免缺失字段回退 DEFAULT_CONFIG。
+ */
+function deepMergeConfig<T>(base: T | undefined, patch: T | undefined): T | undefined {
+  if (patch === undefined) return base;
+  if (base === undefined) return patch;
+  if (
+    Array.isArray(base) ||
+    Array.isArray(patch) ||
+    typeof base !== "object" ||
+    typeof patch !== "object" ||
+    base === null ||
+    patch === null
+  ) {
+    return patch;
+  }
+
+  const result: Record<string, unknown> = {
+    ...(base as Record<string, unknown>),
+  };
+  for (const [key, value] of Object.entries(patch)) {
+    if (value === undefined) continue;
+    result[key] = deepMergeConfig(
+      (base as Record<string, unknown>)[key],
+      value,
+    );
+  }
+  return result as T;
+}
+
 function migrateSocial(social: unknown): SocialLink[] {
   // New format — already an array
   if (Array.isArray(social)) return social;
@@ -81,16 +170,39 @@ function migrateSocial(social: unknown): SocialLink[] {
   return [...blogConfig.social];
 }
 
+/** 读取时丢弃不安全/非法 social 链接，单条坏数据不影响整份站点配置 */
+function sanitizeSocialLinks(links: SocialLink[]): SocialLink[] {
+  return links.flatMap((link) => {
+    const normalized =
+      link.platform === "email" &&
+      !link.url.includes(":") &&
+      link.url.includes("@")
+        ? { ...link, url: `mailto:${link.url}` }
+        : link;
+    const result = SocialLinkSchema.safeParse(normalized);
+    if (!result.success) {
+      console.error(
+        JSON.stringify({
+          message: "dropped invalid social link",
+          platform: link.platform,
+        }),
+      );
+      return [];
+    }
+    return [result.data];
+  });
+}
+
 export function resolveSiteConfig(
   config: SystemConfig | null | undefined,
 ): SiteConfig {
   const configDefaultBackground = config?.site?.theme?.default?.background;
 
-  return FullSiteConfigSchema.parse({
+  const parsed = {
     title: config?.site?.title ?? blogConfig.title,
     author: config?.site?.author ?? blogConfig.author,
     description: config?.site?.description ?? blogConfig.description,
-    social: migrateSocial(config?.site?.social),
+    social: sanitizeSocialLinks(migrateSocial(config?.site?.social)),
     icons: {
       faviconSvg:
         config?.site?.icons?.faviconSvg || blogConfig.icons.faviconSvg,
@@ -133,7 +245,20 @@ export function resolveSiteConfig(
           blogConfig.theme.fuwari.primaryHue,
       },
     },
-  });
+  };
+
+  try {
+    return FullSiteConfigSchema.parse(parsed);
+  } catch (error) {
+    // 损坏/旧格式配置不能让公共页面 500：降级到 blogConfig 并记录
+    console.error(
+      JSON.stringify({
+        message: "invalid site config, falling back to blogConfig",
+        error: error instanceof Error ? error.message : String(error),
+      }),
+    );
+    return FullSiteConfigSchema.parse(blogConfig);
+  }
 }
 
 function hasSiteConfigChanged(
@@ -149,9 +274,18 @@ function hasSiteConfigChanged(
 export async function getSystemConfig(
   context: DbContext & { executionCtx: ExecutionContext },
 ) {
-  const config = await CacheService.get(
+  // 版本化缓存：update 时 bump version，旧并发请求的 waitUntil 写入不会复活旧配置
+  let version: string | null = null;
+  try {
+    version = await CacheService.getVersion(context, CACHE_NAMESPACES.CONFIG);
+  } catch {
+    version = null;
+  }
+
+  const config = await CacheService.getVersioned(
     context,
-    CONFIG_CACHE_KEYS.system,
+    CACHE_NAMESPACES.CONFIG,
+    (cacheVersion) => ["system", cacheVersion],
     SystemConfigSchema,
     async () =>
       resolveSystemConfig(await ConfigRepo.getSystemConfig(context.db)),
@@ -159,11 +293,14 @@ export async function getSystemConfig(
 
   const normalizedConfig = resolveSystemConfig(config);
 
-  if (JSON.stringify(config) !== JSON.stringify(normalizedConfig)) {
+  if (
+    version &&
+    JSON.stringify(config) !== JSON.stringify(normalizedConfig)
+  ) {
     context.executionCtx.waitUntil(
       CacheService.set(
         context,
-        CONFIG_CACHE_KEYS.system,
+        ["system", version],
         JSON.stringify(normalizedConfig),
         { ttl: "1h" },
       ),
@@ -180,19 +317,62 @@ export async function getSiteConfig(
   return resolveSiteConfig(config);
 }
 
+export async function getSystemConfigAdmin(
+  context: DbContext & { executionCtx: ExecutionContext },
+) {
+  const config = await getSystemConfig(context);
+  const row = await ConfigRepo.getSystemConfigWithMeta(context.db);
+  return {
+    config: maskSystemConfigSecrets(config),
+    updatedAt: row?.updatedAt.toISOString() ?? null,
+    version: row?.version ?? 0,
+  };
+}
+
 export async function updateSystemConfig(
   context: DbContext & { executionCtx: ExecutionContext },
   data: SystemConfig,
+  options: { expectedUpdatedAt?: string; expectedVersion?: number } = {},
 ) {
-  const currentConfig = await ConfigRepo.getSystemConfig(context.db);
-  const nextConfig = resolveSystemConfig(data);
+  const currentRow = await ConfigRepo.getSystemConfigWithMeta(context.db);
+  const currentConfig = currentRow?.config ?? null;
+  if (
+    options.expectedVersion !== undefined &&
+    currentRow &&
+    currentRow.version !== options.expectedVersion
+  ) {
+    throw new Error("CONFIG_CONFLICT");
+  }
+  // 掩码字段未修改时沿用当前密钥，避免把 **************** 写进数据库
+  const restoredData = restoreMaskedSecrets(data, currentConfig);
+  // 深合并：允许只提交部分字段，缺失字段沿用当前配置而不是 DEFAULT_CONFIG
+  const mergedConfig =
+    deepMergeConfig(currentConfig ?? {}, restoredData) ?? restoredData;
+  const nextConfig = resolveSystemConfig(mergedConfig);
 
   await ConfigRepo.upsertSystemConfig(context.db, nextConfig);
+  await CacheService.bumpVersion(context, CACHE_NAMESPACES.CONFIG);
+  // 清理旧版静态 key（升级兼容）
   await CacheService.deleteKey(context, CONFIG_CACHE_KEYS.system);
 
   if (hasSiteConfigChanged(currentConfig, nextConfig)) {
     await purgeSiteCDNCache(context.env);
   }
+
+  const changedKeys = Object.keys(data).filter(
+    (key) => data[key as keyof SystemConfig] !== undefined,
+  );
+  console.log(
+    JSON.stringify({
+      message: "system config updated",
+      changedKeys,
+    }),
+  );
+  await recordAdminAudit(context, {
+    action: "config.update",
+    resourceType: "system_config",
+    metadata: { changedKeys },
+  });
 
   return { success: true };
 }
@@ -202,29 +382,41 @@ export async function uploadSiteAsset(
   input: { file: File; assetPath: string },
 ): Promise<{ url: string }> {
   const mime = input.file.type.toLowerCase();
-  const isSvgOrIcon =
-    mime.includes("svg") ||
-    mime.includes("icon") ||
-    /\.(svg|ico)$/i.test(input.file.name);
+  const isSvg = mime.includes("svg") || /\.svg$/i.test(input.file.name);
+  const isIco = mime.includes("icon") || /\.ico$/i.test(input.file.name);
 
-  // 非 SVG/ICO 的资源按文件头校验真实类型，避免伪装文件落到同源资源路径
-  let detectedMime: string | null = null;
-  if (!isSvgOrIcon) {
-    const { detectImageMime } = await import(
+  const bytes = new Uint8Array(await input.file.arrayBuffer());
+
+  let contentType = mime;
+  let storedBytes: Uint8Array = bytes;
+
+  if (isSvg) {
+    if (!isSafeSvgAsset(bytes)) {
+      throw new Error("Invalid SVG file");
+    }
+    contentType = "image/svg+xml";
+  } else if (isIco) {
+    if (!isIcoAsset(bytes)) {
+      throw new Error("Invalid ICO file");
+    }
+    contentType = "image/x-icon";
+  } else {
+    const { detectImageMime, stripImageMetadata } = await import(
       "@/features/media/utils/media.utils"
     );
-    const bytes = new Uint8Array(await input.file.arrayBuffer());
-    detectedMime = detectImageMime(bytes);
+    const detectedMime = detectImageMime(bytes);
     if (!detectedMime) {
       throw new Error("Invalid image file");
     }
+    contentType = detectedMime;
+    storedBytes = stripImageMetadata(bytes, detectedMime);
   }
 
   const { url } = await Storage.putSiteAsset(
     context.env,
     input.file,
     input.assetPath,
-    detectedMime ? { contentType: detectedMime } : undefined,
+    { contentType, bytes: storedBytes },
   );
 
   const timestamp = Math.floor(Date.now() / 1000);

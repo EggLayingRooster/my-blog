@@ -1,6 +1,7 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import * as ConfigService from "@/features/config/service/config.service";
+import { SECRET_MASK } from "@/features/config/service/config.service";
 import { TestEmailConnectionSchema } from "@/features/email/email.schema";
 import * as EmailService from "@/features/email/service/email.service";
 import { EMAIL_UNSUBSCRIBE_TYPES } from "@/lib/db/schema";
@@ -15,9 +16,14 @@ export const testEmailConnectionFn = createServerFn({
 })
   .middleware([adminMiddleware])
   .inputValidator(TestEmailConnectionSchema)
-  .handler(({ context, data }) =>
-    EmailService.testEmailConnection(context, data),
-  );
+  .handler(async ({ context, data }) => {
+    let password = data.password;
+    if (password === SECRET_MASK) {
+      const config = await ConfigService.getSystemConfig(context);
+      password = config.email?.password ?? "";
+    }
+    return EmailService.testEmailConnection(context, { ...data, password });
+  });
 
 export const unsubscribeByTokenFn = createServerFn({
   method: "POST",

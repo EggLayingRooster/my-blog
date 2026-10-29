@@ -4,7 +4,11 @@ import { EmailLayout } from "./EmailLayout";
 
 interface AuthEmailProps {
   locale: Locale;
-  type: "verification" | "reset-password";
+  type:
+    | "verification"
+    | "reset-password"
+    | "change-email"
+    | "delete-account";
   url: string;
 }
 

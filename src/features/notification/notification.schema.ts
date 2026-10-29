@@ -116,3 +116,9 @@ export const notificationEventSchema = z.discriminatedUnion("type", [
 export type NotificationEvent = z.infer<typeof notificationEventSchema>;
 export type NotificationEventType = z.infer<typeof notificationEventTypeSchema>;
 export type NotificationChannel = z.infer<typeof notificationChannelSchema>;
+
+export const GetNotificationDeliveriesInputSchema = z.object({
+  limit: z.number().int().min(1).max(100).optional(),
+  offset: z.number().int().min(0).optional(),
+  status: z.enum(["success", "failed", "skipped"]).optional(),
+});

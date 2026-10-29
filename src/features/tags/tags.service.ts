@@ -4,6 +4,7 @@ import * as PostRepo from "@/features/posts/data/posts.data";
 import { POSTS_CACHE_KEYS } from "@/features/posts/schema/posts.schema";
 import * as PostAutoSnapshotService from "@/features/posts/services/post-auto-snapshot.service";
 import * as TagRepo from "@/features/tags/data/tags.data";
+import { recordAdminAudit } from "@/features/admin-audit/service/admin-audit.service";
 import type {
   CreateTagInput,
   DeleteTagInput,
@@ -15,11 +16,13 @@ import type {
   UpdateTagInput,
 } from "@/features/tags/tags.schema";
 import {
+  normalizeTagName,
   TAGS_CACHE_KEYS,
   TagWithCountSchema,
 } from "@/features/tags/tags.schema";
 import { err, ok } from "@/lib/errors";
 import { purgeCDNCache } from "@/lib/invalidate";
+import { upsertPostSearchIndex } from "@/features/posts/workflows/helpers";
 
 /**
  * Get all tags (cached)
@@ -99,6 +102,28 @@ export async function getTagsByPostId(
  * Create a new tag
  */
 
+function isUniqueTagNameError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /UNIQUE constraint failed: tags\.name|SQLITE_CONSTRAINT_UNIQUE/i.test(
+    message,
+  );
+}
+
+/** 只重索引受影响文章，避免标签改名/删除时全量重建 Orama */
+async function reindexAffectedPosts(
+  context: DbContext,
+  affectedPosts: Array<{ id: number; slug: string }>,
+): Promise<void> {
+  await Promise.all(
+    affectedPosts.map(async (affected) => {
+      const post = await PostRepo.findPostById(context.db, affected.id);
+      if (post) {
+        await upsertPostSearchIndex(context.env, post);
+      }
+    }),
+  );
+}
+
 /**
  * Helper to invalidate caches related to tags and their associated posts.
  *
@@ -133,7 +158,7 @@ async function invalidateTagRelatedCache(
     }
 
     // Purge CDN for affected posts and list pages
-    const cdnUrls = ["/", "/posts"];
+    const cdnUrls = ["/", "/posts", "/api/tags"];
     for (const post of affectedPosts) {
       cdnUrls.push(`/post/${post.slug}`);
     }
@@ -145,19 +170,58 @@ async function invalidateTagRelatedCache(
     await Promise.all([
       CacheService.bumpVersion(context, "posts:detail"),
       CacheService.bumpVersion(context, "posts:list"),
-      purgeCDNCache(context.env, { urls: ["/", "/posts"] }),
+      purgeCDNCache(context.env, { urls: ["/", "/posts", "/api/tags"] }),
     ]);
   }
 }
 
 export const createTag = async (context: DbContext, data: CreateTagInput) => {
-  const exists = await TagRepo.nameExists(context.db, data.name);
+  const name = normalizeTagName(data.name);
+  if (!name) {
+    return err({ reason: "TAG_NAME_ALREADY_EXISTS" });
+  }
+
+  const exists = await TagRepo.nameExists(context.db, name);
   if (exists) {
     return err({ reason: "TAG_NAME_ALREADY_EXISTS" });
   }
 
-  const tag = await TagRepo.insertTag(context.db, {
-    name: data.name,
+  let tag: Tag;
+  try {
+    tag = await TagRepo.insertTag(context.db, { name });
+  } catch (error) {
+    if (isUniqueTagNameError(error)) {
+      return err({ reason: "TAG_NAME_ALREADY_EXISTS" });
+    }
+    throw error;
+  }
+
+  // 新建标签也必须刷新公共标签列表与 /api/tags CDN
+  try {
+    await CacheService.deleteKey(context, TAGS_CACHE_KEYS.publicList);
+    await purgeCDNCache(context.env, { urls: ["/api/tags"] });
+  } catch (error) {
+    console.error(
+      JSON.stringify({
+        message: "tag cache invalidation failed after create",
+        tagId: tag.id,
+        error: error instanceof Error ? error.message : String(error),
+      }),
+    );
+  }
+
+  await recordAdminAudit(context, {
+    action: "tag.create",
+    resourceType: "tag",
+    resourceId: tag.id,
+    metadata: { name: tag.name },
+  });
+
+  await recordAdminAudit(context, {
+    action: "tag.update",
+    resourceType: "tag",
+    resourceId: tag.id,
+    metadata: { name: tag.name },
   });
 
   return ok(tag);
@@ -175,8 +239,16 @@ export async function updateTag(
     return err({ reason: "TAG_NOT_FOUND" });
   }
 
-  if (data.data.name && data.data.name !== existingTag.name) {
-    const exists = await TagRepo.nameExists(context.db, data.data.name, {
+  const normalizedName = data.data.name
+    ? normalizeTagName(data.data.name)
+    : undefined;
+
+  if (normalizedName === existingTag.name) {
+    return ok(existingTag);
+  }
+
+  if (normalizedName) {
+    const exists = await TagRepo.nameExists(context.db, normalizedName, {
       excludeId: data.id,
     });
     if (exists) {
@@ -189,10 +261,34 @@ export async function updateTag(
     data.id,
   );
 
-  const tag = await TagRepo.updateTag(context.db, data.id, data.data);
+  let tag: Tag;
+  try {
+    tag = await TagRepo.updateTag(context.db, data.id, {
+      ...data.data,
+      ...(normalizedName ? { name: normalizedName } : {}),
+    });
+  } catch (error) {
+    if (isUniqueTagNameError(error)) {
+      return err({ reason: "TAG_NAME_ALREADY_EXISTS" });
+    }
+    throw error;
+  }
 
   context.executionCtx.waitUntil(
-    invalidateTagRelatedCache(context, affectedPosts),
+    (async () => {
+      await invalidateTagRelatedCache(context, affectedPosts);
+      try {
+        await reindexAffectedPosts(context, affectedPosts);
+      } catch (error) {
+        console.error(
+          JSON.stringify({
+            message: "tag search reindex failed",
+            tagId: data.id,
+            error: error instanceof Error ? error.message : String(error),
+          }),
+        );
+      }
+    })(),
   );
 
   return ok(tag);
@@ -219,7 +315,20 @@ export async function deleteTag(
   await TagRepo.deleteTag(context.db, data.id);
 
   context.executionCtx.waitUntil(
-    invalidateTagRelatedCache(context, affectedPosts),
+    (async () => {
+      await invalidateTagRelatedCache(context, affectedPosts);
+      try {
+        await reindexAffectedPosts(context, affectedPosts);
+      } catch (error) {
+        console.error(
+          JSON.stringify({
+            message: "tag search reindex failed",
+            tagId: data.id,
+            error: error instanceof Error ? error.message : String(error),
+          }),
+        );
+      }
+    })(),
   );
 
   return ok({ success: true });

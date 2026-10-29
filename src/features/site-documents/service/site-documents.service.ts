@@ -29,7 +29,10 @@ function buildManifest(
         sizes: "512x512",
       },
     ],
-    theme_color: "#ffffff",
+    theme_color:
+      __THEME_NAME__ === "fuwari"
+        ? `hsl(${site.theme.fuwari.primaryHue} 60% 50%)`
+        : "#ffffff",
     background_color: "#ffffff",
     display: "standalone",
   };
@@ -93,6 +96,12 @@ async function getAllPublishedPostsForSitemap(env: Env) {
 
 export async function buildSitemapXml(env: Env) {
   const posts = await getAllPublishedPostsForSitemap(env);
+  const latestModifiedAt = posts.reduce<Date | null>((latest, post) => {
+    const candidate = post.updatedAt ?? post.publishedAt ?? post.createdAt;
+    if (!candidate) return latest;
+    return !latest || candidate > latest ? candidate : latest;
+  }, null);
+  const staticLastmod = latestModifiedAt?.toISOString();
 
   const formatDate = (
     primaryDate: Date | null,
@@ -107,11 +116,13 @@ export async function buildSitemapXml(env: Env) {
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
   <url>
     <loc>https://${env.DOMAIN}/</loc>
+    ${staticLastmod ? `<lastmod>${staticLastmod}</lastmod>` : ""}
     <changefreq>daily</changefreq>
     <priority>1.0</priority>
   </url>
   <url>
     <loc>https://${env.DOMAIN}/posts</loc>
+    ${staticLastmod ? `<lastmod>${staticLastmod}</lastmod>` : ""}
     <changefreq>weekly</changefreq>
     <priority>0.8</priority>
   </url>

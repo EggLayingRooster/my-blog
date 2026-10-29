@@ -1,6 +1,7 @@
 import type { JSONContent } from "@tiptap/react";
 import { useMemo } from "react";
 import { renderReact } from "@/features/theme/themes/default/components/content/render";
+import { ContentErrorBoundary } from "@/components/content/content-error-boundary";
 import { cn } from "@/lib/utils";
 
 interface ContentRendererProps {
@@ -13,6 +14,14 @@ interface ContentRendererProps {
  * 服务器端渲染 React 组件，客户端 hydration 后自动激活交互功能
  */
 export function ContentRenderer({ content, className }: ContentRendererProps) {
+  return (
+    <ContentErrorBoundary>
+      <ContentRendererInner content={content} className={className} />
+    </ContentErrorBoundary>
+  );
+}
+
+function ContentRendererInner({ content, className }: ContentRendererProps) {
   const renderedContent = useMemo(() => {
     if (!content) return null;
     return renderReact(content);

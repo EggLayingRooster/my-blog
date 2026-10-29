@@ -8,6 +8,8 @@ import {
   usePasswordForm,
   useProfileForm,
 } from "@/features/auth/hooks";
+import { AccountSecurityActions } from "@/features/auth/components/account-security-actions";
+import { AccountSessionsSection } from "@/features/auth/components/account-sessions-section";
 import { AUTH_KEYS } from "@/features/auth/queries";
 import { authClient } from "@/lib/auth/auth.client";
 import { m } from "@/paraglide/messages";
@@ -46,12 +48,19 @@ function ProfilePage() {
   if (!user) return null;
 
   return (
-    <theme.ProfilePage
-      user={user}
-      profileForm={profileForm}
-      passwordForm={hasPassword ? passwordForm : null}
-      notification={notification}
-      logout={logout}
-    />
+    <>
+      <theme.ProfilePage
+        user={user}
+        profileForm={profileForm}
+        passwordForm={hasPassword ? passwordForm : null}
+        notification={notification}
+        logout={logout}
+      />
+      <AccountSessionsSection />
+      <AccountSecurityActions
+        hasPassword={!!hasPassword}
+        isAdmin={user.role === "admin"}
+      />
+    </>
   );
 }

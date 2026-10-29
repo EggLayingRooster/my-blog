@@ -19,34 +19,14 @@ export const postsSetVisibilityTool = defineMcpTool({
   inputSchema: McpPostSetVisibilityInputSchema,
   outputSchema: McpPostSetVisibilityOutputSchema,
   async handler(args, context) {
-    const updateResult = await PostService.updatePost(context, {
-      id: args.id,
-      data: {
-        status: args.visibility,
-        ...(args.publishedAt !== undefined
-          ? {
-              publishedAt: args.publishedAt ? new Date(args.publishedAt) : null,
-            }
-          : {}),
-      },
-    });
-
-    if (updateResult.error) {
-      return {
-        content: [
-          {
-            type: "text",
-            text: `Post ${args.id} not found`,
-          },
-        ],
-        isError: true,
-      };
-    }
-
+    // 状态/发布时间统一由发布流程写入，避免 updatePost + workflow 双重写入
     await PostService.startPostProcessWorkflow(context, {
       id: args.id,
       status: args.visibility,
       clientToday: args.clientToday ?? toLocalDateString(new Date()),
+      ...(args.publishedAt !== undefined
+        ? { publishedAt: args.publishedAt }
+        : {}),
     });
 
     const post = await PostService.findPostById(context, { id: args.id });

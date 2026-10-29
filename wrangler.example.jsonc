@@ -8,6 +8,12 @@
     "enabled": true
   },
   "keep_vars": true,
+
+  "triggers": {
+
+    "crons": ["0 3 * * *"]
+
+  },
   "routes": [
     {
       "pattern": "DOMAIN_PLACEHOLDER",

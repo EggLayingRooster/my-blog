@@ -51,7 +51,7 @@ export async function buildFeed(env: Env, executionCtx: ExecutionContext) {
     )
     .orderBy(desc(PostsTable.publishedAt))
     .limit(100);
-  const { DOMAIN } = serverEnv(env);
+  const { DOMAIN, LOCALE } = serverEnv(env);
   const year = new Date().getFullYear();
   const feedAuthor = {
     name: siteConfig.author,
@@ -64,6 +64,7 @@ export async function buildFeed(env: Env, executionCtx: ExecutionContext) {
     description: siteConfig.description,
     id: `https://${DOMAIN}/`,
     link: `https://${DOMAIN}/`,
+    language: LOCALE === "zh" ? "zh-CN" : "en",
     favicon: `https://${DOMAIN}/favicon.ico`,
     copyright: `All rights reserved ${year}, ${siteConfig.author}`,
     generator: siteConfig.title,

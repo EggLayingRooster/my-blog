@@ -39,9 +39,18 @@ function getMatchedWebhookEndpoints(
   );
 }
 
+async function createNotificationEventId(event: NotificationEvent) {
+  const bytes = new TextEncoder().encode(JSON.stringify(event));
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return Array.from(new Uint8Array(digest))
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
+}
+
 async function enqueueEmailNotification(
   context: DbContext,
   event: NotificationEvent,
+  eventId: string,
 ) {
   const emailMessage = createEmailMessageFromNotification(
     event,
@@ -49,7 +58,7 @@ async function enqueueEmailNotification(
   );
   await context.env.QUEUE.send({
     type: "EMAIL",
-    data: emailMessage,
+    data: { ...emailMessage, idempotencyKey: eventId },
   });
 }
 
@@ -57,6 +66,7 @@ async function enqueueWebhookNotification(
   context: DbContext & { executionCtx: ExecutionContext },
   event: Extract<NotificationEvent, { type: NotificationWebhookEventType }>,
   config: Awaited<ReturnType<typeof ConfigService.getSystemConfig>>,
+  eventId: string,
 ) {
   const endpoints = getMatchedWebhookEndpoints(config, event.type);
 
@@ -69,6 +79,7 @@ async function enqueueWebhookNotification(
           url: endpoint.url,
           secret: endpoint.secret,
           event,
+          eventId,
         },
       }),
     ),
@@ -80,6 +91,7 @@ export async function publishNotificationEvent(
   event: NotificationEvent,
 ) {
   const parsed = notificationEventSchema.parse(event);
+  const eventId = await createNotificationEventId(parsed);
   const config = await ConfigService.getSystemConfig(context);
   const adminEmailEnabled =
     config?.notification?.admin?.channels?.email ?? true;
@@ -92,7 +104,7 @@ export async function publishNotificationEvent(
       return;
     }
 
-    await enqueueEmailNotification(context, parsed);
+    await enqueueEmailNotification(context, parsed, eventId);
     console.log(
       JSON.stringify({
         level: "info",
@@ -108,25 +120,28 @@ export async function publishNotificationEvent(
     const deliveries: Array<Promise<void>> = [];
 
     if (adminEmailEnabled) {
-      deliveries.push(enqueueEmailNotification(context, parsed));
+      deliveries.push(enqueueEmailNotification(context, parsed, eventId));
     }
 
     if (adminWebhookEnabled && isNotificationWebhookEventType(parsed)) {
-      deliveries.push(enqueueWebhookNotification(context, parsed, config));
+      deliveries.push(
+        enqueueWebhookNotification(context, parsed, config, eventId),
+      );
     }
 
+    await Promise.all(deliveries);
     console.log(
       JSON.stringify({
         level: "info",
         message: "Notification published",
         eventType: parsed.type,
+        eventId,
         deliveries: {
           email: adminEmailEnabled,
           webhook: adminWebhookEnabled,
         },
       }),
     );
-    await Promise.all(deliveries);
     return;
   }
 

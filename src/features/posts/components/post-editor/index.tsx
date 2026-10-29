@@ -2,7 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useBlocker } from "@tanstack/react-router";
 import type { JSONContent, Editor as TiptapEditor } from "@tiptap/react";
 import { History, Loader2 } from "lucide-react";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Editor } from "@/components/tiptap-editor";
 import { Button } from "@/components/ui/button";
 import ConfirmationModal from "@/components/ui/confirmation-modal";
@@ -29,6 +29,7 @@ export function PostEditor({ initialData, onSave }: PostEditorProps) {
     contentJson: initialData.contentJson ?? null,
     publishedAt: initialData.publishedAt,
     pinnedAt: initialData.pinnedAt,
+    updatedAt: initialData.updatedAt,
     tagIds: initialData.tagIds,
     isSynced: initialData.isSynced,
     hasPublicCache: initialData.hasPublicCache,
@@ -64,17 +65,46 @@ export function PostEditor({ initialData, onSave }: PostEditorProps) {
   const { data: allTags = [] } = useQuery(tagsAdminQueryOptions());
 
   // Auto-save hook
+  const handleSave = useCallback(
+    async (data: PostEditorData) => {
+      const savedUpdatedAt = await onSave(data);
+      if (savedUpdatedAt) {
+        setPost((prev) => ({ ...prev, updatedAt: savedUpdatedAt }));
+      }
+      return savedUpdatedAt;
+    },
+    [onSave],
+  );
+
   const useAutoSaveReturn = useAutoSave({
     post,
-    onSave,
+    onSave: handleSave,
   });
 
-  const { saveStatus, lastSaved, setError, markSaved } = useAutoSaveReturn;
+  const {
+    saveStatus,
+    lastSaved,
+    setError,
+    saveNow,
+    isDirty: autoSaveDirty,
+    markSaved,
+  } = useAutoSaveReturn;
 
   const { proceed, reset, status } = useBlocker({
-    shouldBlockFn: () => saveStatus === "SAVING",
+    shouldBlockFn: () => saveStatus === "SAVING" || autoSaveDirty,
     withResolver: true,
   });
+
+  useEffect(() => {
+    if (!autoSaveDirty) return;
+    const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () =>
+      window.removeEventListener("beforeunload", handleBeforeUnload);
+  }, [autoSaveDirty]);
 
   // Post actions hook
   const {
@@ -98,6 +128,14 @@ export function PostEditor({ initialData, onSave }: PostEditorProps) {
     setError,
     allTags,
   });
+
+  const handleProcess = async () => {
+    // 发布前先落库最新内容，避免 Workflow 读取到旧内容
+    const saved = await saveNow();
+    if (saved) {
+      handleProcessData();
+    }
+  };
 
   const handleContentChange = useCallback((json: JSONContent) => {
     setPost((prev) => ({ ...prev, contentJson: json }));
@@ -134,6 +172,7 @@ export function PostEditor({ initialData, onSave }: PostEditorProps) {
           ? new Date(snapshot.publishedAt)
           : null,
         pinnedAt: post.pinnedAt,
+        updatedAt: new Date(),
         tagIds: snapshot.tagIds,
         isSynced: snapshot.status === "draft" ? !hasPublicCache : false,
         hasPublicCache,
@@ -188,7 +227,7 @@ export function PostEditor({ initialData, onSave }: PostEditorProps) {
         onPreview={() => {
           if (post.slug) window.open(`/post/${post.slug}`, "_blank");
         }}
-        onProcess={handleProcessData}
+        onProcess={handleProcess}
       />
 
       <PostEditorHistoryPanel

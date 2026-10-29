@@ -26,6 +26,7 @@ export const webhookMessageSchema = z.object({
     url: z.url(),
     secret: z.string(),
     event: notificationEventSchema,
+    eventId: z.string().optional(),
   }),
 });
 
@@ -35,6 +36,10 @@ export const postAutoSnapshotMessageSchema = z.object({
     postId: z.number().int().positive(),
     quietWindowSeconds: z.number().int().positive().optional(),
   }),
+});
+
+export const searchRebuildMessageSchema = z.object({
+  type: z.literal("SEARCH_REBUILD"),
 });
 
 export const pageviewMessageSchema = z.object({
@@ -49,6 +54,7 @@ export const queueMessageSchema = z.discriminatedUnion("type", [
   emailMessageSchema,
   webhookMessageSchema,
   postAutoSnapshotMessageSchema,
+  searchRebuildMessageSchema,
   pageviewMessageSchema,
 ]);
 
@@ -59,3 +65,5 @@ export type PostAutoSnapshotMessage = z.infer<
   typeof postAutoSnapshotMessageSchema
 >;
 export type PageviewMessage = z.infer<typeof pageviewMessageSchema>;
+
+export type SearchRebuildMessage = z.infer<typeof searchRebuildMessageSchema>;

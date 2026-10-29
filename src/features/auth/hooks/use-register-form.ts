@@ -56,6 +56,14 @@ export function useRegisterForm(options: UseRegisterFormOptions) {
   });
 
   const onSubmit = async (data: RegisterSchema) => {
+    // 未配置 SMTP 时后端仍要求邮箱验证，注册后无法登录；直接阻止
+    if (!isEmailConfigured) {
+      toast.error(m.register_toast_failed(), {
+        description: m.register_error_email_not_configured(),
+      });
+      return;
+    }
+
     const { error } = await authClient.signUp.email({
       email: data.email,
       password: data.password,
@@ -71,7 +79,10 @@ export function useRegisterForm(options: UseRegisterFormOptions) {
     if (error) {
       toast.error(m.register_toast_failed(), {
         description:
-          getRegisterAuthErrorMessage(error, m) ?? m.register_error_default(),
+          error.code === "REGISTRATION_UNAVAILABLE"
+            ? m.register_error_unavailable()
+            : (getRegisterAuthErrorMessage(error, m) ??
+              m.register_error_default()),
       });
       return;
     }

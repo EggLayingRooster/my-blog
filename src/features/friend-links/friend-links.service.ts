@@ -1,3 +1,4 @@
+import { recordAdminAudit } from "@/features/admin-audit/service/admin-audit.service";
 import * as CacheService from "@/features/cache/cache.service";
 import { publishNotificationEvent } from "@/features/notification/service/notification.publisher";
 import { serverEnv } from "@/lib/env/server.env";
@@ -209,6 +210,13 @@ export async function approveFriendLink(
     }
   }
 
+  await recordAdminAudit(context, {
+    action: "friend_link.approve",
+    resourceType: "friend_link",
+    resourceId: friendLink.id,
+    metadata: { siteName: friendLink.siteName },
+  });
+
   return ok(updated);
 }
 
@@ -257,6 +265,13 @@ export async function rejectFriendLink(
     }
   }
 
+  await recordAdminAudit(context, {
+    action: "friend_link.reject",
+    resourceType: "friend_link",
+    resourceId: friendLink.id,
+    metadata: { siteName: friendLink.siteName },
+  });
+
   return ok(updated);
 }
 
@@ -284,6 +299,13 @@ export async function updateFriendLink(
     invalidateCache(context);
   }
 
+  await recordAdminAudit(context, {
+    action: "friend_link.update",
+    resourceType: "friend_link",
+    resourceId: friendLink.id,
+    metadata: { siteName: friendLink.siteName },
+  });
+
   return ok(updated);
 }
 
@@ -304,6 +326,13 @@ export async function deleteFriendLink(
   if (friendLink.status === "approved") {
     invalidateCache(context);
   }
+
+  await recordAdminAudit(context, {
+    action: "friend_link.delete",
+    resourceType: "friend_link",
+    resourceId: friendLink.id,
+    metadata: { siteName: friendLink.siteName },
+  });
 
   return ok({ success: true });
 }

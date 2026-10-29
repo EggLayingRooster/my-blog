@@ -11,12 +11,12 @@ import type { Messages } from "@/lib/i18n";
 export const SystemConfigSchema = z.object({
   email: z
     .object({
-      apiKey: z.string().optional(),
-      host: z.string().optional(),
-      port: z.number().int().positive().optional(),
-      username: z.string().optional(),
-      password: z.string().optional(),
-      senderName: z.string().optional(),
+      apiKey: z.string().max(1000).optional(),
+      host: z.string().max(253).optional(),
+      port: z.number().int().positive().max(65535).optional(),
+      username: z.string().max(320).optional(),
+      password: z.string().max(1000).optional(),
+      senderName: z.string().max(100).optional(),
       senderAddress: z.union([z.email(), z.literal("")]).optional(),
     })
     .optional(),

@@ -36,6 +36,7 @@ import { generateTableOfContents } from "@/features/posts/utils/toc";
 import * as SearchService from "@/features/search/service/search.service";
 import { TAGS_CACHE_KEYS } from "@/features/tags/tags.schema";
 import { CACHE_TTL, POSTS_PAGE_SIZE } from "@/lib/constants";
+import { recordAdminAudit } from "@/features/admin-audit/service/admin-audit.service";
 import { err, ok } from "@/lib/errors";
 import { purgePostCDNCache } from "@/lib/invalidate";
 
@@ -340,9 +341,49 @@ export async function updatePost(
   context: DbContext & { executionCtx: ExecutionContext; env?: Env },
   data: UpdatePostInput,
 ) {
+  const previousPost = await PostRepo.findPostById(context.db, data.id);
+  if (
+    data.expectedUpdatedAt &&
+    previousPost &&
+    previousPost.updatedAt.toISOString() !== data.expectedUpdatedAt
+  ) {
+    return err({ reason: "POST_CONFLICT" });
+  }
   const updatedPost = await PostRepo.updatePost(context.db, data.id, data.data);
   if (!updatedPost) {
     return err({ reason: "POST_NOT_FOUND" });
+  }
+
+  // 已发布文章改 slug：旧 URL 的 detail 缓存/CDN 也必须失效
+  if (
+    previousPost &&
+    previousPost.slug !== updatedPost.slug &&
+    (previousPost.status === "published" || updatedPost.status === "published")
+  ) {
+    context.executionCtx.waitUntil(
+      (async () => {
+        const version = await CacheService.getVersion(
+          context,
+          "posts:detail",
+        );
+        await CacheService.deleteKey(
+          context,
+          POSTS_CACHE_KEYS.detail(version, previousPost.slug),
+        );
+        if (context.env) {
+          await purgePostCDNCache(context.env, previousPost.slug);
+        }
+      })().catch((error) => {
+        console.error(
+          JSON.stringify({
+            message: "old post slug cache invalidation failed",
+            postId: updatedPost.id,
+            oldSlug: previousPost.slug,
+            error: error instanceof Error ? error.message : String(error),
+          }),
+        );
+      }),
+    );
   }
 
   if (data.data.contentJson !== undefined) {
@@ -368,6 +409,15 @@ export async function deletePost(
   const post = await PostRepo.findPostById(context.db, data.id);
   if (!post) {
     return err({ reason: "POST_NOT_FOUND" });
+  }
+
+  try {
+    const scheduled = await context.env.SCHEDULED_PUBLISH_WORKFLOW.get(
+      `post-${data.id}-scheduled`,
+    );
+    await scheduled.terminate();
+  } catch {
+    // 没有排期实例时忽略
   }
 
   await PostRepo.deletePost(context.db, data.id);
@@ -399,6 +449,13 @@ export async function deletePost(
     );
   }
 
+  await recordAdminAudit(context, {
+    action: "post.delete",
+    resourceType: "post",
+    resourceId: data.id,
+    metadata: { slug: post.slug, status: post.status },
+  });
+
   return ok({ success: true });
 }
 
@@ -415,12 +472,40 @@ export async function startPostProcessWorkflow(
   context: DbContext,
   data: StartPostProcessInput,
 ) {
-  let publishedAtISO: string | undefined;
+  let post = await PostRepo.findPostById(context.db, data.id);
+  if (!post) return;
+
+  const targetStatus = data.status;
+  const targetPublishedAt =
+    data.publishedAt !== undefined
+      ? data.publishedAt
+        ? new Date(data.publishedAt)
+        : null
+      : post.publishedAt;
+  const effectivePublishedAt =
+    targetStatus === "published" && !targetPublishedAt
+      ? new Date()
+      : targetPublishedAt;
+
+  // 状态/发布时间只在这里（发布/下架 action）落库，autosave 不再写这两个字段
+  if (
+    post.status !== targetStatus ||
+    (post.publishedAt?.getTime() ?? null) !==
+      (effectivePublishedAt?.getTime() ?? null)
+  ) {
+    const updated = await PostRepo.updatePost(context.db, post.id, {
+      status: targetStatus,
+      publishedAt: effectivePublishedAt,
+    });
+    if (updated) post = updated;
+  }
+
+  const publishedAtISO = effectivePublishedAt
+    ? effectivePublishedAt.toISOString()
+    : undefined;
   let snapshotHash: string | undefined;
 
-  const post = await PostRepo.findPostById(context.db, data.id);
-
-  if (data.status === "published" && post) {
+  if (targetStatus === "published") {
     snapshotHash = await calculatePostHash({
       title: post.title,
       contentJson: post.contentJson,
@@ -465,19 +550,6 @@ export async function startPostProcessWorkflow(
     }
   }
 
-  // Check if we need to auto-set the published date
-  if (data.status === "published") {
-    if (post && !post.publishedAt) {
-      const now = new Date();
-      await PostRepo.updatePost(context.db, post.id, {
-        publishedAt: now,
-      });
-      publishedAtISO = now.toISOString();
-    } else if (post?.publishedAt) {
-      publishedAtISO = post.publishedAt.toISOString();
-    }
-  }
-
   // publishedAt 是发布者本地当天 00:00 的精确时间戳，直接按时间判断是否未来
   const isFuture =
     !!publishedAtISO && new Date(publishedAtISO).getTime() > Date.now();
@@ -494,7 +566,7 @@ export async function startPostProcessWorkflow(
 
   const postProcessParams = {
     postId: data.id,
-    isPublished: data.status === "published",
+    isPublished: targetStatus === "published",
     publishedAt: publishedAtISO,
     isFuturePost: isFuture,
   };
@@ -519,7 +591,7 @@ export async function startPostProcessWorkflow(
   }
 
   // If this is a future post, create a new scheduled publish workflow
-  if (data.status === "published" && isFuture) {
+  if (targetStatus === "published" && isFuture) {
     const scheduledParams = {
       postId: data.id,
       publishedAt: publishedAtISO!,
@@ -548,4 +620,17 @@ export async function startPostProcessWorkflow(
       ]);
     }
   }
+
+  await recordAdminAudit(context, {
+    action: targetStatus === "published" ? "post.publish" : "post.unpublish",
+    resourceType: "post",
+    resourceId: data.id,
+    metadata: {
+      slug: post.slug,
+      publishedAt: publishedAtISO ?? null,
+      isFuture,
+    },
+  });
+
+  return { updatedAt: post.updatedAt.toISOString() };
 }

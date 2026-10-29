@@ -6,8 +6,10 @@ import {
   gte,
   inArray,
   lt,
+  lte,
   sql,
 } from "drizzle-orm";
+import { SITE_TIME_ZONE_OFFSET_SECONDS } from "@/lib/constants";
 import type { DB } from "@/lib/db";
 import { PageViewsTable, PostsTable } from "@/lib/db/schema";
 
@@ -47,7 +49,7 @@ export async function getTrafficTrend(
   const truncExpr =
     unit === "hour"
       ? sql<number>`(${PageViewsTable.createdAt} - ${PageViewsTable.createdAt} % 3600)`
-      : sql<number>`(${PageViewsTable.createdAt} - ${PageViewsTable.createdAt} % 86400)`;
+      : sql<number>`(${PageViewsTable.createdAt} + ${SITE_TIME_ZONE_OFFSET_SECONDS}) - ((${PageViewsTable.createdAt} + ${SITE_TIME_ZONE_OFFSET_SECONDS}) % 86400) - ${SITE_TIME_ZONE_OFFSET_SECONDS}`;
 
   const rows = await db
     .select({
@@ -72,10 +74,15 @@ export async function getTrafficTrend(
   }
 
   // 补齐没有数据的时间桶：只有一个数据点时前端折线/面积图画不出来
+  const offset = unit === "day" ? SITE_TIME_ZONE_OFFSET_SECONDS : 0;
   const startBucket =
-    Math.floor(startAt.getTime() / 1000 / stepSeconds) * stepSeconds;
+    Math.floor((startAt.getTime() / 1000 + offset) / stepSeconds) *
+      stepSeconds -
+    offset;
   const endBucket =
-    Math.floor(endAt.getTime() / 1000 / stepSeconds) * stepSeconds;
+    Math.floor((endAt.getTime() / 1000 + offset) / stepSeconds) *
+      stepSeconds -
+    offset;
 
   const trend: Array<{ date: number; views: number }> = [];
   for (
@@ -100,7 +107,10 @@ export async function getTopPages(
   startAt: Date,
   endAt: Date,
   limit = 5,
+  options: { publicOnly?: boolean } = {},
 ): Promise<Array<{ slug: string; title: string; views: number }>> {
+  const publicOnly = options.publicOnly ?? true;
+
   return db
     .select({
       slug: PostsTable.slug,
@@ -113,6 +123,12 @@ export async function getTopPages(
       and(
         gte(PageViewsTable.createdAt, startAt),
         lt(PageViewsTable.createdAt, endAt),
+        ...(publicOnly
+          ? [
+              eq(PostsTable.status, "published"),
+              lte(PostsTable.publishedAt, new Date()),
+            ]
+          : []),
       ),
     )
     .groupBy(PostsTable.slug)
@@ -136,8 +152,19 @@ export async function getViewCountsBySlugs(
     })
     .from(PageViewsTable)
     .innerJoin(PostsTable, eq(PageViewsTable.postId, PostsTable.id))
-    .where(inArray(PostsTable.slug, slugs))
+    .where(
+      and(
+        inArray(PostsTable.slug, slugs),
+        eq(PostsTable.status, "published"),
+        lte(PostsTable.publishedAt, new Date()),
+      ),
+    )
     .groupBy(PostsTable.slug);
 
   return Object.fromEntries(rows.map((r) => [r.slug, r.views]));
+}
+
+/** 删除早于 before 的 PV 记录（保留策略由 scheduled 任务调用） */
+export async function deletePageviewsBefore(db: DB, before: Date): Promise<void> {
+  await db.delete(PageViewsTable).where(lt(PageViewsTable.createdAt, before));
 }

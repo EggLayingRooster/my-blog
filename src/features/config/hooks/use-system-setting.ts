@@ -1,11 +1,18 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import type { SystemConfig } from "@/features/config/config.schema";
 import { updateSystemConfigFn } from "@/features/config/api/config.api";
 import { CONFIG_KEYS, systemConfigQuery } from "@/features/config/queries";
 
 export function useSystemSetting() {
   const queryClient = useQueryClient();
 
-  const { data, isLoading } = useQuery(systemConfigQuery);
+  const { data, isLoading } = useQuery({
+    ...systemConfigQuery,
+    staleTime: Infinity,
+    refetchOnWindowFocus: false,
+  });
+  const updatedAt = data?.updatedAt ?? null;
+  const version = data?.version ?? 0;
 
   const saveMutation = useMutation({
     mutationFn: updateSystemConfigFn,
@@ -18,8 +25,15 @@ export function useSystemSetting() {
   });
 
   return {
-    settings: data,
+    settings: data?.config,
+    updatedAt,
     isLoading,
-    saveSettings: saveMutation.mutateAsync,
+    saveSettings: (config: SystemConfig) =>
+      saveMutation.mutateAsync({
+        data: {
+          config,
+          expectedVersion: version,
+        },
+      }),
   };
 }

@@ -1,10 +1,17 @@
 import handler from "@tanstack/react-start/server-entry";
 import type { Context } from "hono";
 import { Hono } from "hono";
+import { createMiddleware } from "hono/factory";
+import { z } from "zod";
+import * as EmailService from "@/features/email/service/email.service";
+import { EMAIL_UNSUBSCRIBE_TYPES } from "@/lib/db/schema";
 import { proxy } from "hono/proxy";
 import { exportDownloadRoute } from "@/features/import-export/api/hono/download.route";
 import { handleImageRequest } from "@/features/media/service/media.service";
-import { isValidMediaKey } from "@/features/media/utils/media.utils";
+import {
+  isValidMediaKey,
+  normalizeImageQuery,
+} from "@/features/media/utils/media.utils";
 import postsDetailRoute from "@/features/posts/api/hono/posts.detail.route";
 import postsListRoute from "@/features/posts/api/hono/posts.list.route";
 import postsRelatedRoute from "@/features/posts/api/hono/posts.related.route";
@@ -74,13 +81,53 @@ app.all("/api/send", async (c) => {
   return proxy(sendUrl, c.req);
 });
 
-app.get("/images/:key{.+}", async (c) => {
+const imageRateLimit = createMiddleware(async (c, next) => {
+  // Image Resizing 的内部子请求不占用用户图片限流额度
+  if (c.req.header("via")?.includes("image-resizing")) {
+    return next();
+  }
+
+  const ip = c.req.header("cf-connecting-ip") ?? "unknown";
+  try {
+    const limiter = c.env.RATE_LIMITER.get(
+      c.env.RATE_LIMITER.idFromName(`image:${ip}`),
+    );
+    const limit = await limiter.checkLimit({ capacity: 300, interval: "1m" });
+    if (!limit.allowed) {
+      return c.text("Too Many Requests", 429);
+    }
+  } catch (error) {
+    console.error(
+      JSON.stringify({
+        message: "image rate limit check failed",
+        error: error instanceof Error ? error.message : String(error),
+      }),
+    );
+  }
+
+  return next();
+});
+
+app.get("/images/:key{.+}", imageRateLimit, async (c) => {
   const key = c.req.param("key");
 
   // 只允许媒体对象（UUID 文件名）或站点资源（asset/ 前缀）。
-  // 否则该公开路由会变成任意 R2 对象读取器（例如 exports/*.zip 导出包）。
   if (!key || !isValidMediaKey(key)) {
     return c.text("Not Found", 404);
+  }
+
+  const url = new URL(c.req.url);
+  const normalized = normalizeImageQuery(url.searchParams, {
+    isAsset: key.startsWith("asset/"),
+  });
+  if (!normalized.ok) {
+    return c.text("Invalid image query", 400);
+  }
+
+  const canonicalUrl = new URL(url);
+  canonicalUrl.search = normalized.query.toString();
+  if (canonicalUrl.search !== url.search) {
+    return c.redirect(canonicalUrl.toString(), 308);
   }
 
   try {
@@ -158,6 +205,50 @@ app.post(
 
 // Admin export download route
 app.route("/api/admin/export", exportDownloadRoute);
+
+const unsubscribeQuerySchema = z.object({
+  userId: z.string().min(1),
+  type: z.enum(EMAIL_UNSUBSCRIBE_TYPES),
+  token: z.string().min(1),
+});
+
+/**
+ * RFC 8058 One-Click Unsubscribe 端点。
+ * 邮件客户端会向邮件头 List-Unsubscribe 里的 URL 发送 POST，而不是打开页面。
+ */
+app.post("/unsubscribe", baseMiddleware, async (c) => {
+  const parsed = unsubscribeQuerySchema.safeParse({
+    userId: c.req.query("userId"),
+    type: c.req.query("type"),
+    token: c.req.query("token"),
+  });
+
+  if (!parsed.success) {
+    return c.text("Invalid unsubscribe request", 400);
+  }
+
+  try {
+    const result = await EmailService.unsubscribeByToken(
+      { db: c.get("db"), env: c.env },
+      parsed.data,
+    );
+    if (result.error) {
+      return c.text("Invalid or expired token", 400);
+    }
+    c.header("Cache-Control", "no-store");
+    return c.body(null, 204);
+  } catch (error) {
+    console.error(
+      JSON.stringify({
+        message: "one-click unsubscribe failed",
+        userId: parsed.data.userId,
+        type: parsed.data.type,
+        error: error instanceof Error ? error.message : String(error),
+      }),
+    );
+    return c.text("Unsubscribe failed", 500);
+  }
+});
 
 // Router之前的防护
 app.all("*", shieldMiddleware);

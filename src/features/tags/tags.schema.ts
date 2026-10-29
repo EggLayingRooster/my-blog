@@ -21,13 +21,13 @@ export const TagWithCountSchema = TagSelectSchema.extend({
 
 // API Input Schemas
 export const CreateTagInputSchema = z.object({
-  name: z.string().min(1).max(50),
+  name: z.string().trim().min(1).max(50),
 });
 
 export const UpdateTagInputSchema = z.object({
   id: z.number(),
   data: z.object({
-    name: z.string().min(1).max(50).optional(),
+    name: z.string().trim().min(1).max(50).optional(),
   }),
 });
 
@@ -43,8 +43,11 @@ export const GetTagsInputSchema = z.object({
 });
 
 export const SetPostTagsInputSchema = z.object({
-  postId: z.number(),
-  tagIds: z.array(z.number()),
+  postId: z.number().int().positive(),
+  tagIds: z
+    .array(z.number().int().positive())
+    .max(50)
+    .transform((ids) => [...new Set(ids)]),
 });
 
 export const GetTagsByPostIdInputSchema = z.object({
@@ -72,3 +75,8 @@ export type GenerateTagsInput = z.infer<typeof GenerateTagsInputSchema>;
 export const TAGS_CACHE_KEYS = {
   publicList: ["public", "tags", "list"] as const,
 } as const;
+
+/** 标签名称归一：去掉首尾空白并合并内部连续空白 */
+export function normalizeTagName(name: string): string {
+  return name.normalize("NFKC").trim().replace(/\s+/g, " ");
+}

@@ -78,6 +78,27 @@
       "when": 1774071685152,
       "tag": "0010_romantic_roland_deschain",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "6",
+      "when": 1793238558805,
+      "tag": "0011_classy_gorilla_man",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "6",
+      "when": 1793238909253,
+      "tag": "0012_rapid_felicia_hardy",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "6",
+      "when": 1793240410966,
+      "tag": "0013_fresh_wolf_cub",
+      "breakpoints": true
     }
   ]
 }

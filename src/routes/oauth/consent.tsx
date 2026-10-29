@@ -157,7 +157,10 @@ function RouteComponent() {
     clientMetadata?.clientName ||
     search.client_id ||
     m.oauth_consent_unknown_client();
-  const clientIcon = clientMetadata?.clientIcon;
+  const rawClientIcon = clientMetadata?.clientIcon;
+  // 只允许站内资源，避免 consent 页加载外部跟踪图片
+  const clientIcon =
+    rawClientIcon && rawClientIcon.startsWith("/") ? rawClientIcon : null;
   const isCompleted = completedRedirectUrl !== null;
 
   return (

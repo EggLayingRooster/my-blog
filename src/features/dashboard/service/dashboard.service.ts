@@ -7,6 +7,7 @@ import { ALL_RANGES } from "@/features/dashboard/dashboard.schema";
 import * as DashboardRepo from "@/features/dashboard/data/dashboard.data";
 import * as MediaRepo from "@/features/media/data/media.data";
 import * as PageviewRepo from "@/features/pageview/data/pageview.data";
+import { getSiteDayStartMs } from "@/features/pageview/utils/time";
 import {
   CachedAllRangesSchema,
   PAGEVIEW_CACHE_KEYS,
@@ -28,11 +29,9 @@ function getTimeRange(range: DashboardRange) {
     prevStartAt.setHours(prevStartAt.getHours() - 24);
   } else {
     const days = range === "7d" ? 7 : range === "30d" ? 30 : 90;
-    startAt = new Date(now);
-    startAt.setDate(startAt.getDate() - days);
-    startAt.setHours(0, 0, 0, 0);
-    prevStartAt = new Date(startAt);
-    prevStartAt.setDate(prevStartAt.getDate() - days);
+    // 按站点时区（Asia/Shanghai）的自然日对齐，避免 UTC 零点造成日曲线偏移
+    startAt = new Date(getSiteDayStartMs(now.getTime()) - days * 86400000);
+    prevStartAt = new Date(startAt.getTime() - days * 86400000);
   }
 
   return { startAt, endAt, prevStartAt };

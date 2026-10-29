@@ -233,8 +233,20 @@ describe("Tags & Search Integration", () => {
   describe("SearchService", () => {
     it("should upsert and search for a document", async () => {
       const context = createAdminTestContext();
+      const post = await PostService.createEmptyPost(context);
+      unwrap(
+        await PostService.updatePost(context, {
+          id: post.id,
+          data: {
+            title: "Test Post Title",
+            slug: "test-post",
+            status: "published",
+            publishedAt: new Date(Date.now() - 1000),
+          },
+        }),
+      );
       const doc = {
-        id: 1,
+        id: post.id,
         slug: "test-post",
         title: "Test Post Title",
         summary: "This is a summary of the test post.",
@@ -264,8 +276,20 @@ describe("Tags & Search Integration", () => {
 
     it("should delete a document from index", async () => {
       const context = createAdminTestContext();
+      const post = await PostService.createEmptyPost(context);
+      unwrap(
+        await PostService.updatePost(context, {
+          id: post.id,
+          data: {
+            title: "To Be Deleted",
+            slug: "test-post-2",
+            status: "published",
+            publishedAt: new Date(Date.now() - 1000),
+          },
+        }),
+      );
       const doc = {
-        id: 2,
+        id: post.id,
         slug: "test-post-2",
         title: "To Be Deleted",
         summary: "Summary",
@@ -338,3 +362,69 @@ describe("Tags & Search Integration", () => {
     });
   });
 });
+describe("Tag cache & normalization", () => {
+  let adminContext: ReturnType<typeof createAdminTestContext>;
+
+  beforeEach(async () => {
+    adminContext = createAdminTestContext();
+    await seedUser(adminContext.db, adminContext.session.user);
+  });
+
+  it("invalidates the public tag cache when creating a tag", async () => {
+    await CacheService.set(
+      adminContext,
+      TAGS_CACHE_KEYS.publicList,
+      JSON.stringify([
+        { id: 1, name: "stale", createdAt: new Date(), postCount: 1 },
+      ]),
+      { ttl: "7d" },
+    );
+
+    unwrap(await TagService.createTag(adminContext, { name: "new-tag" }));
+
+    const cached = await CacheService.getRaw(
+      adminContext,
+      TAGS_CACHE_KEYS.publicList,
+    );
+    expect(cached).toBeNull();
+  });
+
+  it("treats tag names as case-insensitive and trims whitespace", async () => {
+    unwrap(await TagService.createTag(adminContext, { name: "React" }));
+
+    const duplicate = await TagService.createTag(adminContext, {
+      name: "  react  ",
+    });
+    expect(duplicate.error?.reason).toBe("TAG_NAME_ALREADY_EXISTS");
+  });
+});
+
+    it("does not return search hits for non-public posts", async () => {
+      const context = createAdminTestContext();
+      const post = await PostService.createEmptyPost(context);
+      unwrap(
+        await PostService.updatePost(context, {
+          id: post.id,
+          data: {
+            title: "Draft Search Leak",
+            slug: "draft-search-leak",
+          },
+        }),
+      );
+
+      await SearchService.upsert(context, {
+        id: post.id,
+        slug: "draft-search-leak",
+        title: "Draft Search Leak",
+        summary: "draft",
+        contentJson: null,
+        tags: [],
+      });
+
+      const results = await SearchService.search(context, {
+        q: "Leak",
+        v: "1",
+        limit: 10,
+      });
+      expect(results).toHaveLength(0);
+    });

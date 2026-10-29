@@ -4,10 +4,22 @@ import { z } from "zod";
 import { SearchQuerySchema } from "@/features/search/search.schema";
 import * as SearchService from "@/features/search/service/search.service";
 import { setCacheHeaders } from "@/lib/hono/helper";
-import { baseMiddleware } from "@/lib/hono/middlewares";
+import {
+  baseMiddleware,
+  rateLimitMiddleware,
+} from "@/lib/hono/middlewares";
 
 const app = new Hono<{ Bindings: Env }>();
 
+app.use(
+  "/",
+  rateLimitMiddleware({
+    capacity: 60,
+    interval: "1m",
+    identifier: (c) =>
+      `search:${c.req.header("cf-connecting-ip") ?? "unknown"}`,
+  }),
+);
 app.use("*", baseMiddleware);
 
 const route = app.get(
@@ -15,7 +27,7 @@ const route = app.get(
   zValidator(
     "query",
     SearchQuerySchema.extend({
-      limit: z.coerce.number().optional().default(10),
+      limit: z.coerce.number().int().min(1).max(25).optional().default(10),
     }),
   ),
   async (c) => {

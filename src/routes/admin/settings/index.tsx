@@ -98,6 +98,17 @@ function RouteComponent() {
   }, [settings, reset]);
 
   useEffect(() => {
+    if (!isDirty) return;
+    const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () =>
+      window.removeEventListener("beforeunload", handleBeforeUnload);
+  }, [isDirty]);
+
+  useEffect(() => {
     if (!hasMountedRef.current) {
       hasMountedRef.current = true;
       return;
@@ -118,11 +129,18 @@ function RouteComponent() {
 
   const onSubmit = async (data: SystemConfig) => {
     try {
-      await saveSettings({ data });
+      await saveSettings(data);
       toast.success(m.settings_toast_save_success());
       // Reset dirty state with new values
       reset(data);
-    } catch {
+    } catch (error) {
+      if (
+        error instanceof Error &&
+        error.message.includes("CONFIG_CONFLICT")
+      ) {
+        toast.error(m.settings_toast_conflict());
+        return;
+      }
       toast.error(m.settings_toast_save_error());
     }
   };

@@ -1,5 +1,8 @@
+import { AdminAuditSection } from "@/features/admin-audit/components/admin-audit-section";
 import { CacheMaintenance } from "@/features/cache/components/cache-maintenance";
 import { BackupRestoreSection } from "@/features/import-export/components/backup-restore-section";
+import { MediaCleanupSection } from "@/features/media/components/media-cleanup-section";
+import { NotificationDeliveriesSection } from "@/features/notification/components/notification-deliveries-section";
 import { SearchMaintenance } from "@/features/search/components/search-maintenance";
 import { VersionMaintenance } from "@/features/version/components/version-maintenance";
 
@@ -14,6 +17,10 @@ export function MaintenanceSection() {
         <SearchMaintenance />
         <CacheMaintenance />
       </div>
+
+      <NotificationDeliveriesSection />
+      <MediaCleanupSection />
+      <AdminAuditSection />
 
       <div className="pt-4 border-t border-border/20">
         <BackupRestoreSection />

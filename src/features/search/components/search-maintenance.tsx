@@ -17,18 +17,15 @@ export function SearchMaintenance() {
         id: rebuildToastId,
       });
     },
-    onSuccess: (result) => {
-      toast.success(
-        m.settings_maintenance_search_toast_success({
-          duration: result.duration,
-          indexed: result.indexed,
-        }),
-        { id: rebuildToastId },
-      );
+    onSuccess: () => {
+      toast.success(m.settings_maintenance_search_toast_queued(), {
+        id: rebuildToastId,
+      });
     },
     onSettled: (_data, error) => {
       if (!error) return;
       toast.dismiss(rebuildToastId);
+      toast.error(m.error_desc());
     },
   });
 

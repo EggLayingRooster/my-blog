@@ -21,6 +21,7 @@ import {
   detectImageMime,
   generateKey,
   getExtensionForMime,
+  stripImageMetadata,
 } from "@/features/media/utils/media.utils";
 import { syncPostMedia } from "@/features/posts/data/post-media.data";
 import * as PostRepo from "@/features/posts/data/posts.data";
@@ -344,11 +345,12 @@ export async function uploadImages(
       continue;
     }
     const newKey = generateKey(oldKey, getExtensionForMime(detectedMime));
+    const sanitizedData = stripImageMetadata(imageData, detectedMime);
 
     const mimeType = detectedMime;
 
     try {
-      await env.R2.put(newKey, imageData, {
+      await env.R2.put(newKey, sanitizedData, {
         httpMetadata: { contentType: mimeType },
         customMetadata: { originalName: oldKey },
       });
@@ -358,7 +360,7 @@ export async function uploadImages(
         url: `/images/${newKey}`,
         fileName: oldKey,
         mimeType,
-        sizeInBytes: imageData.length,
+        sizeInBytes: sanitizedData.length,
       });
 
       rewriteMap.set(oldKey, newKey);
@@ -459,10 +461,11 @@ async function uploadMarkdownImages(
       continue;
     }
     const newKey = generateKey(fileName, getExtensionForMime(detectedMime));
+    const sanitizedData = stripImageMetadata(imageData, detectedMime);
     const mimeType = detectedMime;
 
     try {
-      await env.R2.put(newKey, imageData, {
+      await env.R2.put(newKey, sanitizedData, {
         httpMetadata: { contentType: mimeType },
         customMetadata: { originalName: fileName },
       });
@@ -472,7 +475,7 @@ async function uploadMarkdownImages(
         url: `/images/${newKey}`,
         fileName,
         mimeType,
-        sizeInBytes: imageData.length,
+        sizeInBytes: sanitizedData.length,
       });
 
       rewriteMap.set(img.original, `/images/${newKey}?quality=80`);

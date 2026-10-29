@@ -1,3 +1,8 @@
+import { cleanupExpiredAuthRecords } from "@/features/auth/service/auth.service";
+import { cleanupStaleVerifyingComments } from "@/features/comments/comments.service";
+import { backfillMediaMetadata } from "@/features/media/service/media.service";
+import { cleanupOldPageviews } from "@/features/pageview/service/pageview.service";
+import { getDb } from "@/lib/db";
 import { handleQueueBatch } from "@/lib/queue/queue.handler";
 
 export { CommentModerationWorkflow } from "@/features/comments/workflows/comment-moderation";
@@ -27,5 +32,38 @@ export default {
   },
   async queue(batch, env, ctx) {
     await handleQueueBatch(batch, env, ctx);
+  },
+  async scheduled(_controller, env, ctx) {
+    const jobs = [
+      ["pageview cleanup", () => cleanupOldPageviews(env)],
+      ["auth cleanup", () => cleanupExpiredAuthRecords(env)],
+      [
+        "stale comment reconciliation",
+        () => cleanupStaleVerifyingComments({ db: getDb(env), env }),
+      ],
+      [
+        "media metadata backfill",
+        () => backfillMediaMetadata(env, { limit: 50 }),
+      ],
+    ] as const;
+
+    ctx.waitUntil(
+      Promise.allSettled(jobs.map(([, run]) => run())).then((results) => {
+        results.forEach((result, index) => {
+          if (result.status === "rejected") {
+            console.error(
+              JSON.stringify({
+                message: "scheduled task failed",
+                task: jobs[index][0],
+                error:
+                  result.reason instanceof Error
+                    ? result.reason.message
+                    : String(result.reason),
+              }),
+            );
+          }
+        });
+      }),
+    );
   },
 } satisfies ExportedHandler<Env>;

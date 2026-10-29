@@ -6,7 +6,8 @@ import {
 } from "@/features/pageview/pageview.schema";
 import * as PostRepo from "@/features/posts/data/posts.data";
 import { PostItemSchema } from "@/features/posts/schema/posts.schema";
-import { CACHE_TTL } from "@/lib/constants";
+import { CACHE_TTL, PAGEVIEW_RETENTION_DAYS } from "@/lib/constants";
+import { getDb } from "@/lib/db";
 
 export async function getPopularPosts(
   context: DbContext & { executionCtx: ExecutionContext },
@@ -56,5 +57,20 @@ export async function getViewCounts(
     ViewCountsSchema,
     () => PageviewRepo.getViewCountsBySlugs(context.db, slugs),
     { ttl: CACHE_TTL.viewCounts },
+  );
+}
+
+/** scheduled 任务：清理超过保留期的 page_views，避免表无界增长 */
+export async function cleanupOldPageviews(env: Env): Promise<void> {
+  const db = getDb(env);
+  const cutoff = new Date(
+    Date.now() - PAGEVIEW_RETENTION_DAYS * 24 * 60 * 60 * 1000,
+  );
+  await PageviewRepo.deletePageviewsBefore(db, cutoff);
+  console.log(
+    JSON.stringify({
+      message: "pageview cleanup completed",
+      cutoff: cutoff.toISOString(),
+    }),
   );
 }

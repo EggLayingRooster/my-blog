@@ -58,7 +58,7 @@ export const RestorePostRevisionInputSchema = z.object({
 
 export const DeletePostRevisionsInputSchema = z.object({
   postId: z.number(),
-  revisionIds: z.array(z.number().int()).min(1),
+  revisionIds: z.array(z.number().int()).min(1).max(100),
 });
 
 export const PostRevisionListItemSchema = PostRevisionSelectSchema.pick({

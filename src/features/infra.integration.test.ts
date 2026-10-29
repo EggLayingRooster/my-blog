@@ -4,6 +4,7 @@ import { z } from "zod";
 import * as CacheService from "@/features/cache/cache.service";
 import { serializeKey } from "@/features/cache/cache.utils";
 import type { CacheNamespace } from "@/features/cache/types";
+import { CACHE_NAMESPACES } from "@/features/cache/types";
 import { DEFAULT_CONFIG } from "@/features/config/config.schema";
 import * as ConfigRepo from "@/features/config/data/config.data";
 import * as ConfigService from "@/features/config/service/config.service";
@@ -514,8 +515,13 @@ describe("Infra Integration", () => {
     });
 
     it("normalizes legacy cached email config on cache hit", async () => {
+      const version = await CacheService.getVersion(
+        context,
+        CACHE_NAMESPACES.CONFIG,
+      );
+      const cacheKey = `system:${version}`;
       await context.env.KV.put(
-        "system",
+        cacheKey,
         JSON.stringify({
           ...DEFAULT_CONFIG,
           email: {
@@ -539,7 +545,7 @@ describe("Infra Integration", () => {
 
       await waitForBackgroundTasks(context.executionCtx);
 
-      const cached = await context.env.KV.get("system", "json");
+      const cached = await context.env.KV.get(cacheKey, "json");
       expect(cached).toMatchObject({
         email: {
           host: "smtp.resend.com",

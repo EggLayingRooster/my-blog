@@ -1,4 +1,4 @@
-import { and, count, desc, eq, like, sql } from "drizzle-orm";
+import { and, count, desc, eq, inArray, like, lt, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/sqlite-core";
 import { buildCommentWhereClause } from "@/features/comments/data/helper";
 import type { CommentStatus } from "@/lib/db/schema";
@@ -131,6 +131,69 @@ export async function getReplyCountByRootId(
   return result[0].count;
 }
 
+/** 批量查询多个根评论的回复数，避免逐条 count */
+export async function getReplyCountsByRootIds(
+  db: DB,
+  postId: number,
+  rootIds: Array<number>,
+  options: {
+    status?: CommentStatus | Array<CommentStatus>;
+    viewerId?: string;
+  } = {},
+): Promise<Map<number, number>> {
+  if (rootIds.length === 0) return new Map();
+
+  const conditions = buildCommentWhereClause({
+    postId,
+    status: options.status,
+    viewerId: options.viewerId,
+  });
+  const where = conditions
+    ? and(conditions, inArray(CommentsTable.rootId, rootIds))
+    : inArray(CommentsTable.rootId, rootIds);
+
+  const rows = await db
+    .select({ rootId: CommentsTable.rootId, count: count() })
+    .from(CommentsTable)
+    .where(where)
+    .groupBy(CommentsTable.rootId);
+
+  return new Map(
+    rows
+      .filter(
+        (row): row is { rootId: number; count: number } => row.rootId !== null,
+      )
+      .map((row) => [row.rootId, row.count]),
+  );
+}
+
+/** 批量查询 replyTo 评论作者，避免每条回复两次查询 */
+export async function getReplyAuthorsByCommentIds(
+  db: DB,
+  commentIds: Array<number>,
+): Promise<Map<number, { id: string; name: string }>> {
+  if (commentIds.length === 0) return new Map();
+
+  const rows = await db
+    .select({
+      id: CommentsTable.id,
+      userId: CommentsTable.userId,
+      userName: user.name,
+    })
+    .from(CommentsTable)
+    .leftJoin(user, eq(CommentsTable.userId, user.id))
+    .where(inArray(CommentsTable.id, commentIds));
+
+  return new Map(
+    rows
+      .filter(
+        (row): row is typeof row & { userId: string; userName: string } =>
+          !!row.userId && !!row.userName,
+      )
+      .map((row) => [row.id, { id: row.userId, name: row.userName }]),
+  );
+}
+
 export async function getRepliesByRootId(
   db: DB,
   postId: number,
@@ -178,40 +241,23 @@ export async function getRepliesByRootId(
     .limit(safeLimit)
     .offset(safeOffset);
 
-  // Fetch replyTo user info separately for each reply
-  const repliesWithReplyTo = await Promise.all(
-    replies.map(async (reply) => {
-      if (!reply.replyToCommentId) {
-        return { ...reply, replyTo: null };
-      }
+  // 批量查询 replyTo 作者，避免每条回复 2 次额外查询
+  const replyToIds = [
+    ...new Set(
+      replies
+        .map((reply) => reply.replyToCommentId)
+        .filter((id): id is number => id !== null),
+    ),
+  ];
+  const replyAuthors = await getReplyAuthorsByCommentIds(db, replyToIds);
 
-      const replyToComment = await findCommentById(db, reply.replyToCommentId);
-      if (!replyToComment) {
-        return { ...reply, replyTo: null };
-      }
-
-      if (!replyToComment.userId) {
-        return { ...reply, replyTo: null };
-      }
-
-      const replyToUserInfo = await db.query.user.findFirst({
-        where: eq(user.id, replyToComment.userId),
-        columns: {
-          id: true,
-          name: true,
-        },
-      });
-
-      return {
-        ...reply,
-        replyTo: replyToUserInfo
-          ? { id: replyToUserInfo.id, name: replyToUserInfo.name }
-          : null,
-      };
-    }),
-  );
-
-  return repliesWithReplyTo;
+  return replies.map((reply) => ({
+    ...reply,
+    replyTo:
+      reply.replyToCommentId !== null
+        ? (replyAuthors.get(reply.replyToCommentId) ?? null)
+        : null,
+  }));
 }
 
 export async function getRepliesByRootIdCount(
@@ -456,4 +502,26 @@ export async function getCommentAuthorWithEmail(db: DB, commentId: number) {
     email: result[0].userEmail,
     role: result[0].userRole,
   };
+}
+
+/** 审核 Workflow 异常退出时，把长时间停留在 verifying 的评论转人工，避免永久卡住 */
+export async function markStaleVerifyingCommentsPending(
+  db: DB,
+  olderThan: Date,
+): Promise<number> {
+  const rows = await db
+    .update(CommentsTable)
+    .set({
+      status: "pending",
+      aiReason: "Moderation timed out; pending manual review",
+    })
+    .where(
+      and(
+        eq(CommentsTable.status, "verifying"),
+        lt(CommentsTable.createdAt, olderThan),
+      ),
+    )
+    .returning({ id: CommentsTable.id });
+
+  return rows.length;
 }

@@ -1,5 +1,16 @@
-import { and, asc, count, desc, eq, gt, lte, ne, sql } from "drizzle-orm";
+import {
+  and,
+  asc,
+  count,
+  desc,
+  eq,
+  gt,
+  inArray,
+  lte,
+  sql,
+} from "drizzle-orm";
 import type { BatchItem } from "drizzle-orm/batch";
+import { normalizeTagName } from "@/features/tags/tags.schema";
 import { PostsTable, PostTagsTable, TagsTable } from "@/lib/db/schema";
 
 /**
@@ -180,16 +191,16 @@ export async function nameExists(
   options: { excludeId?: number } = {},
 ): Promise<boolean> {
   const { excludeId } = options;
-  const conditions = [eq(TagsTable.name, name)];
-  if (excludeId) {
-    conditions.push(ne(TagsTable.id, excludeId));
-  }
-  const results = await db
-    .select({ id: TagsTable.id })
-    .from(TagsTable)
-    .where(and(...conditions))
-    .limit(1);
-  return results.length > 0;
+  const target = normalizeTagName(name).toLocaleLowerCase();
+  const rows = await db
+    .select({ id: TagsTable.id, name: TagsTable.name })
+    .from(TagsTable);
+
+  return rows.some(
+    (row) =>
+      row.id !== excludeId &&
+      normalizeTagName(row.name).toLocaleLowerCase() === target,
+  );
 }
 
 /**
@@ -219,4 +230,17 @@ export async function getPublishedPostsByTagId(db: DB, tagId: number) {
     );
 
   return results;
+}
+
+/** 批量查询存在的标签 ID，用于校验 setPostTags 输入 */
+export async function getExistingTagIds(
+  db: DB,
+  tagIds: Array<number>,
+): Promise<Array<number>> {
+  if (tagIds.length === 0) return [];
+  const rows = await db
+    .select({ id: TagsTable.id })
+    .from(TagsTable)
+    .where(inArray(TagsTable.id, tagIds));
+  return rows.map((row) => row.id);
 }

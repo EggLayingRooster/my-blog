@@ -8,15 +8,22 @@ import { m } from "@/paraglide/messages";
 
 export const getSystemConfigFn = createServerFn()
   .middleware([adminMiddleware])
-  .handler(({ context }) => ConfigService.getSystemConfig(context));
+  .handler(({ context }) => ConfigService.getSystemConfigAdmin(context));
 
 export const updateSystemConfigFn = createServerFn({
   method: "POST",
 })
   .middleware([adminMiddleware])
-  .inputValidator(SystemConfigSchema)
+  .inputValidator(
+    z.object({
+      config: SystemConfigSchema,
+      expectedVersion: z.number().int().nonnegative().optional(),
+    }),
+  )
   .handler(({ context, data }) =>
-    ConfigService.updateSystemConfig(context, data),
+    ConfigService.updateSystemConfig(context, data.config, {
+      expectedVersion: data.expectedVersion,
+    }),
   );
 
 const SiteAssetUploadInputSchema = z.instanceof(FormData);

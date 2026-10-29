@@ -10,6 +10,7 @@ export interface PostEditorData {
   contentJson: JSONContent | null;
   publishedAt: Date | null;
   pinnedAt: Date | null;
+  updatedAt: Date;
   tagIds: Array<number>;
   isSynced: boolean;
   hasPublicCache: boolean;
@@ -17,7 +18,7 @@ export interface PostEditorData {
 
 export interface PostEditorProps {
   initialData: PostEditorData & { id: number };
-  onSave: (data: PostEditorData) => Promise<void>;
+  onSave: (data: PostEditorData) => Promise<Date | undefined>;
 }
 
 export type SaveStatus = "SYNCED" | "SAVING" | "PENDING" | "ERROR";
@@ -31,6 +32,7 @@ export const defaultPostData: PostEditorData = {
   contentJson: null,
   publishedAt: null,
   pinnedAt: null,
+  updatedAt: new Date(),
   tagIds: [],
   isSynced: true,
   hasPublicCache: false,

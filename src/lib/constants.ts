@@ -9,6 +9,12 @@ export const MAX_POSTS_PAGE_SIZE = 50;
 /** 站点展示时区：SSR 与客户端使用同一时区格式化日期，避免 hydration 不一致 */
 export const SITE_TIME_ZONE = "Asia/Shanghai";
 
+/** Asia/Shanghai 无 DST，固定 +08:00（用于按站点时区切分统计桶） */
+export const SITE_TIME_ZONE_OFFSET_SECONDS = 8 * 3600;
+
+/** page_views 保留天数，超过后由 scheduled 任务清理 */
+export const PAGEVIEW_RETENTION_DAYS = 365;
+
 /** 本模块（数据与缓存）使用的 TTL，集中管理避免魔法值散落 */
 export const CACHE_TTL = {
   postsList: "7d",

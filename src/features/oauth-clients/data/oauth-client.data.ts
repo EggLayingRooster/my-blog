@@ -38,16 +38,23 @@ function mapGrantToConnection(
 
 export async function listOAuthConnectionsByUserId(env: Env, userId: string) {
   const oauth = getOAuthHelpers(env);
-  const { items } = await oauth.listUserGrants(userId, { limit: 1000 });
+  const { items } = await oauth.listUserGrants(userId, { limit: 200 });
 
-  const connections = await Promise.all(
-    items.map(async (grant) => {
-      const client = await oauth.lookupClient(grant.clientId);
-      return mapGrantToConnection(
-        grant,
-        client ? normalizeClientInfo(client) : null,
-      );
-    }),
+  const clientIds = [...new Set(items.map((grant) => grant.clientId))];
+  const clientById = new Map(
+    await Promise.all(
+      clientIds.map(async (clientId) => {
+        const client = await oauth.lookupClient(clientId);
+        return [
+          clientId,
+          client ? normalizeClientInfo(client) : null,
+        ] as const;
+      }),
+    ),
+  );
+
+  const connections = items.map((grant) =>
+    mapGrantToConnection(grant, clientById.get(grant.clientId) ?? null),
   );
 
   return connections.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
@@ -84,8 +91,6 @@ export async function deleteOAuthConsentById(
   env: Env,
   consentId: string,
   userId: string,
-) {
+): Promise<void> {
   await getOAuthHelpers(env).revokeGrant(consentId, userId);
-
-  return { consentId };
 }

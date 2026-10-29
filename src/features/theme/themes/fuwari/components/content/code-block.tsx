@@ -1,5 +1,6 @@
 import { Check, ChevronDown, Copy } from "lucide-react";
 import { memo, useLayoutEffect, useRef, useState } from "react";
+import { escapeHtml } from "@/lib/html";
 import { cn } from "@/lib/utils";
 import { m } from "@/paraglide/messages";
 
@@ -43,7 +44,7 @@ const FOLD_THRESHOLD = 400;
 
 export const CodeBlock = memo(
   ({ code, language, highlightedHtml }: CodeBlockProps) => {
-    const fallback = `<pre class="shiki font-mono text-sm leading-relaxed whitespace-pre text-(--fuwari-btn-content) bg-transparent! p-0 m-0 border-0"><code>${code}</code></pre>`;
+    const fallback = `<pre class="shiki font-mono text-sm leading-relaxed whitespace-pre text-(--fuwari-btn-content) bg-transparent! p-0 m-0 border-0"><code>${escapeHtml(code)}</code></pre>`;
     const html = highlightedHtml || fallback;
 
     const [copied, setCopied] = useState(false);

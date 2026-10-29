@@ -82,7 +82,11 @@ function createImageFile(
       expect(result.url).toContain("/images/");
 
       // Verify Storage.putToR2 was called
-      expect(Storage.putToR2).toHaveBeenCalledWith(adminContext.env, file, { contentType: "image/png", extension: "png" });
+      expect(Storage.putToR2).toHaveBeenCalledWith(
+        adminContext.env,
+        file,
+        expect.objectContaining({ contentType: "image/png", extension: "png" }),
+      );
 
       // Verify DB record was created
       const mediaList = await MediaService.getMediaList(adminContext, {});

@@ -1,10 +1,12 @@
 import { createEmailMessageFromNotification } from "@/features/email/service/email-message.mapper";
 import type { NotificationEvent } from "@/features/notification/notification.schema";
-import { serverEnv } from "@/lib/env/server.env";
+import { recordNotificationDelivery } from "@/features/notification/service/notification-delivery.service";
+import { serverEnv, isNotInProduction } from "@/lib/env/server.env";
 import type { Locale } from "@/lib/i18n";
 import type { WebhookMessage } from "@/lib/queue/queue.schema";
 import { m } from "@/paraglide/messages";
 import { baseLocale } from "@/paraglide/runtime";
+import { assertPublicWebhookTarget } from "@/features/webhook/url-guard";
 
 function createPlainTextMessage(event: NotificationEvent, locale: Locale) {
   switch (event.type) {
@@ -136,8 +138,13 @@ export async function sendWebhookRequest(
   const timestamp = body.timestamp;
   const signature = await signPayload(data.secret, payload, timestamp);
 
+  if (!isNotInProduction(context.env)) {
+    await assertPublicWebhookTarget(data.url);
+  }
+
   const response = await fetch(data.url, {
     method: "POST",
+    redirect: "manual",
     signal: AbortSignal.timeout(10_000),
     headers: {
       "Content-Type": "application/json",
@@ -175,5 +182,22 @@ export async function handleWebhookMessage(
   data: WebhookMessage["data"],
   messageId: string,
 ): Promise<void> {
-  await sendWebhookRequest(context, data, messageId);
+  try {
+    await sendWebhookRequest(context, data, messageId);
+    await recordNotificationDelivery(context.env, {
+      eventId: messageId,
+      channel: "webhook",
+      target: data.endpointId,
+      status: "success",
+    });
+  } catch (error) {
+    await recordNotificationDelivery(context.env, {
+      eventId: messageId,
+      channel: "webhook",
+      target: data.endpointId,
+      status: "failed",
+      error: error instanceof Error ? error.message : String(error),
+    });
+    throw error;
+  }
 }

@@ -36,7 +36,10 @@ interface PostEditorHistoryPanelProps {
   onClose: () => void;
   currentSnapshot: PostRevisionSnapshot;
   allTags: Array<{ id: number; name: string }>;
-  onRestoreApplied: (input: { snapshot: PostRevisionSnapshot }) => void;
+  onRestoreApplied: (input: {
+    snapshot: PostRevisionSnapshot;
+    updatedAt?: string | Date;
+  }) => void;
 }
 
 function invalidatePostEditorQueries(

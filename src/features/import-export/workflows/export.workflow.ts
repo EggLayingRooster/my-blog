@@ -24,6 +24,9 @@ import { getDb } from "@/lib/db";
 import { serverEnv } from "@/lib/env/server.env";
 import { m } from "@/paraglide/messages";
 
+const MAX_EXPORT_POSTS = 500;
+const MAX_EXPORT_BYTES = 60 * 1024 * 1024;
+
 export class ExportWorkflow extends WorkflowEntrypoint<
   Env,
   ExportWorkflowParams
@@ -66,6 +69,23 @@ export class ExportWorkflow extends WorkflowEntrypoint<
         return;
       }
 
+      if (posts.length > MAX_EXPORT_POSTS) {
+        await this.updateProgress(progressKey, {
+          status: "failed",
+          total: posts.length,
+          completed: 0,
+          current: "",
+          errors: [
+            {
+              post: "export",
+              reason: `Export contains too many posts (max ${MAX_EXPORT_POSTS})`,
+            },
+          ],
+          warnings: [],
+        });
+        return;
+      }
+
       // 2. Process all posts, build ZIP, upload
       // Consolidated into one step because zipFiles accumulates Uint8Array data
       // which cannot survive JSON serialization through step.do() boundaries.
@@ -74,6 +94,7 @@ export class ExportWorkflow extends WorkflowEntrypoint<
       await step.do("build and upload export", async () => {
         const zipFiles: Record<string, Uint8Array | string> = {};
         const warnings: Array<string> = [];
+        let totalBytes = 0;
 
         for (let i = 0; i < posts.length; i++) {
           const post = posts[i];
@@ -109,10 +130,15 @@ export class ExportWorkflow extends WorkflowEntrypoint<
 
           // Write content.json (lossless backup)
           if (post.contentJson) {
-            zipFiles[`${prefix}/content.json`] = JSON.stringify(
-              post.contentJson,
-              null,
-              2,
+            const contentJson = JSON.stringify(post.contentJson, null, 2);
+            zipFiles[`${prefix}/content.json`] = contentJson;
+            totalBytes += contentJson.length;
+          }
+
+          totalBytes += markdown.length;
+          if (totalBytes > MAX_EXPORT_BYTES) {
+            throw new Error(
+              `Export exceeds size limit (${MAX_EXPORT_BYTES} bytes)`,
             );
           }
 
@@ -124,9 +150,14 @@ export class ExportWorkflow extends WorkflowEntrypoint<
                 const r2Object = await getFromR2(this.env, key);
                 if (r2Object) {
                   const arrayBuffer = await r2Object.arrayBuffer();
-                  zipFiles[`${prefix}/images/${key}`] = new Uint8Array(
-                    arrayBuffer,
-                  );
+                  const imageData = new Uint8Array(arrayBuffer);
+                  zipFiles[`${prefix}/images/${key}`] = imageData;
+                  totalBytes += imageData.byteLength;
+                  if (totalBytes > MAX_EXPORT_BYTES) {
+                    throw new Error(
+                      `Export exceeds size limit (${MAX_EXPORT_BYTES} bytes)`,
+                    );
+                  }
                 } else {
                   warnings.push(
                     m.import_export_export_warning_image_missing(

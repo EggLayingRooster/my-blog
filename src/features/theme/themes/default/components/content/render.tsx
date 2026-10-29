@@ -1,16 +1,34 @@
 import type { JSONContent } from "@tiptap/react";
 import { renderToReactElement } from "@tiptap/static-renderer/pm/react";
+import { createElement } from "react";
+import { headingClasses } from "@/features/posts/editor/extensions/typography/heading";
+import { createHeadingIdGenerator } from "@/features/posts/utils/content";
 import { MathFormula } from "@/components/content/math-formula";
 import { extensions } from "@/features/posts/editor/config";
 import { CodeBlock } from "@/features/theme/themes/default/components/content/code-block";
 import { ImageDisplay } from "@/features/theme/themes/default/components/content/image-display";
 
 export function renderReact(content: JSONContent) {
+  const nextHeadingId = createHeadingIdGenerator();
+
   return renderToReactElement({
     extensions,
     content,
     options: {
       nodeMapping: {
+        heading: ({ node, children }) => {
+          const attrs = node.attrs as { level?: number };
+          const level = Math.min(4, Math.max(1, Number(attrs.level) || 1));
+
+          return createElement(
+            `h${level}`,
+            {
+              className: headingClasses[level],
+              id: nextHeadingId(node.textContent ?? ""),
+            },
+            children,
+          );
+        },
         image: ({ node }) => {
           const attrs = node.attrs as {
             src: string;

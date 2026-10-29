@@ -1,4 +1,7 @@
 import type { WorkflowEvent, WorkflowStep } from "cloudflare:workers";
+import * as PostRepo from "@/features/posts/data/posts.data";
+import { highlightCodeBlocks } from "@/features/posts/utils/content";
+import { getDb } from "@/lib/db";
 import { WorkflowEntrypoint } from "cloudflare:workers";
 import {
   fetchPost,
@@ -26,6 +29,25 @@ export class ScheduledPublishWorkflow extends WorkflowEntrypoint<Env, Params> {
     });
 
     if (!post || post.status !== "published") return;
+
+    // 排期后正文可能被修改：到点时重建公开内容快照，避免公共页继续显示旧内容
+    await step.do(
+      "rebuild public content",
+      {
+        retries: { limit: 3, delay: "10 seconds", backoff: "exponential" },
+      },
+      async () => {
+        const db = getDb(this.env);
+        const publicContentJson = post.contentJson
+          ? await highlightCodeBlocks(post.contentJson)
+          : null;
+        await PostRepo.updatePublicContentSnapshot(
+          db,
+          post.id,
+          publicContentJson,
+        );
+      },
+    );
 
     // purge CDN 可能瞬时失败，重试几次，避免到点后前台仍命中旧缓存
     await step.do(

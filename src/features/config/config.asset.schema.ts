@@ -76,3 +76,30 @@ export function parseSiteAssetUploadInput(
 
   return { file, assetPath: trimmedPath };
 }
+
+/** 基础 SVG 安全检查：拒绝脚本、事件处理器、foreignObject 与 javascript: 链接 */
+export function isSafeSvgAsset(bytes: Uint8Array): boolean {
+  const sample = new TextDecoder("utf-8", { fatal: false })
+    .decode(bytes.slice(0, 64 * 1024))
+    .trimStart()
+    .toLowerCase();
+
+  if (!sample.startsWith("<?xml") && !sample.startsWith("<svg")) return false;
+  if (!sample.includes("<svg")) return false;
+  if (sample.includes("<script")) return false;
+  if (sample.includes("<foreignobject")) return false;
+  if (sample.includes("javascript:")) return false;
+  if (/\son[a-z]+\s*=/.test(sample)) return false;
+
+  return true;
+}
+
+export function isIcoAsset(bytes: Uint8Array): boolean {
+  return (
+    bytes.length >= 4 &&
+    bytes[0] === 0x00 &&
+    bytes[1] === 0x00 &&
+    bytes[2] === 0x01 &&
+    bytes[3] === 0x00
+  );
+}

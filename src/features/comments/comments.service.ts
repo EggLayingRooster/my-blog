@@ -8,6 +8,7 @@ import type {
   StartCommentModerationInput,
 } from "@/features/comments/comments.schema";
 import * as CommentRepo from "@/features/comments/data/comments.data";
+import { recordAdminAudit } from "@/features/admin-audit/service/admin-audit.service";
 import { sendReplyNotification } from "@/features/comments/workflows/helpers";
 import { publishNotificationEvent } from "@/features/notification/service/notification.publisher";
 import * as PostService from "@/features/posts/services/posts.service";
@@ -26,29 +27,28 @@ export async function getRootCommentsByPostId(
       offset: data.offset,
       limit: data.limit,
       viewerId: data.viewerId,
-      status: data.viewerId ? undefined : ["published", "deleted"],
+      status: data.viewerId ? undefined : ["published"],
     }),
     CommentRepo.getRootCommentsByPostIdCount(context.db, data.postId, {
       viewerId: data.viewerId,
-      status: data.viewerId ? undefined : ["published", "deleted"],
+      status: data.viewerId ? undefined : ["published"],
     }),
   ]);
 
-  // Get reply counts for each root comment
-  const itemsWithReplyCount = await Promise.all(
-    items.map(async (item) => {
-      const replyCount = await CommentRepo.getReplyCountByRootId(
-        context.db,
-        data.postId,
-        item.id,
-        {
-          viewerId: data.viewerId,
-          status: data.viewerId ? undefined : ["published", "deleted"],
-        },
-      );
-      return { ...item, replyCount };
-    }),
+  // 批量查询每个根评论的回复数，避免 N+1
+  const replyCounts = await CommentRepo.getReplyCountsByRootIds(
+    context.db,
+    data.postId,
+    items.map((item) => item.id),
+    {
+      viewerId: data.viewerId,
+      status: data.viewerId ? undefined : ["published"],
+    },
   );
+  const itemsWithReplyCount = items.map((item) => ({
+    ...item,
+    replyCount: replyCounts.get(item.id) ?? 0,
+  }));
 
   return { items: itemsWithReplyCount, total };
 }
@@ -64,11 +64,11 @@ export async function getRepliesByRootId(
       offset: data.offset,
       limit: data.limit,
       viewerId: data.viewerId,
-      status: data.viewerId ? undefined : ["published", "deleted"],
+      status: data.viewerId ? undefined : ["published"],
     }),
     CommentRepo.getRepliesByRootIdCount(context.db, data.postId, data.rootId, {
       viewerId: data.viewerId,
-      status: data.viewerId ? undefined : ["published", "deleted"],
+      status: data.viewerId ? undefined : ["published"],
     }),
   ]);
 
@@ -205,16 +205,26 @@ export async function createComment(
       const { ADMIN_EMAIL, DOMAIN } = serverEnv(context.env);
       const commentPreview = convertToPlainText(data.content).slice(0, 100);
       const commenterName = context.session.user.name;
-      await publishNotificationEvent(context, {
-        type: "comment.admin_root_created",
-        data: {
-          to: ADMIN_EMAIL,
-          postTitle: post.title,
-          commenterName,
-          commentPreview: `${commentPreview}${commentPreview.length >= 100 ? "..." : ""}`,
-          commentUrl: `https://${DOMAIN}/post/${post.slug}?highlightCommentId=${comment.id}&rootId=${comment.id}#comment-${comment.id}`,
-        },
-      });
+      try {
+        await publishNotificationEvent(context, {
+          type: "comment.admin_root_created",
+          data: {
+            to: ADMIN_EMAIL,
+            postTitle: post.title,
+            commenterName,
+            commentPreview: `${commentPreview}${commentPreview.length >= 100 ? "..." : ""}`,
+            commentUrl: `https://${DOMAIN}/post/${post.slug}?highlightCommentId=${comment.id}&rootId=${comment.id}#comment-${comment.id}`,
+          },
+        });
+      } catch (error) {
+        console.error(
+          JSON.stringify({
+            message: "comment admin notification failed",
+            commentId: comment.id,
+            error: error instanceof Error ? error.message : String(error),
+          }),
+        );
+      }
     }
   }
 
@@ -326,6 +336,13 @@ export async function moderateComment(
     }
   }
 
+  await recordAdminAudit(context, {
+    action: "comment.moderate",
+    resourceType: "comment",
+    resourceId: comment.id,
+    metadata: { status: data.status },
+  });
+
   return ok(updatedComment);
 }
 
@@ -341,6 +358,13 @@ export async function adminDeleteComment(
 
   // Hard delete for admin
   await CommentRepo.deleteComment(context.db, data.id);
+
+  await recordAdminAudit(context, {
+    action: "comment.delete",
+    resourceType: "comment",
+    resourceId: comment.id,
+    metadata: { status: comment.status, postId: comment.postId },
+  });
 
   return ok({ success: true });
 }
@@ -411,4 +435,24 @@ export async function updateCommentStatusIfVerifying(
 
 export async function getUserCommentStats(context: DbContext, userId: string) {
   return await CommentRepo.getUserCommentStats(context.db, userId);
+}
+
+/** scheduled 任务：清理审核 Workflow 超时后仍停留在 verifying 的评论 */
+export async function cleanupStaleVerifyingComments(
+  context: DbContext,
+  olderThanMinutes = 15,
+): Promise<number> {
+  const count = await CommentRepo.markStaleVerifyingCommentsPending(
+    context.db,
+    new Date(Date.now() - olderThanMinutes * 60 * 1000),
+  );
+  if (count > 0) {
+    console.error(
+      JSON.stringify({
+        message: "stale verifying comments moved to pending",
+        count,
+      }),
+    );
+  }
+  return count;
 }

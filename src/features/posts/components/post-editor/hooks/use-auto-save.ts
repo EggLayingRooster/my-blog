@@ -3,7 +3,7 @@ import type { PostEditorData, SaveStatus } from "../types";
 
 interface UseAutoSaveOptions {
   post: PostEditorData;
-  onSave: (data: PostEditorData) => Promise<void>;
+  onSave: (data: PostEditorData) => Promise<Date | undefined>;
   debounceMs?: number;
 }
 
@@ -14,6 +14,7 @@ interface UseAutoSaveReturn {
   setError: (error: string | null) => void;
   setSaveStatus: (status: SaveStatus) => void;
   isDirty: boolean;
+  saveNow: () => Promise<boolean>;
   markSaved: (post: PostEditorData) => void;
 }
 
@@ -167,6 +168,31 @@ export function useAutoSave({
     };
   }, [post, debounceMs]);
 
+  const saveNow = async (): Promise<boolean> => {
+    if (isSaving.current) return false;
+    isSaving.current = true;
+    setSaveStatus("SAVING");
+    try {
+      await onSaveRef.current(latestPostRef.current);
+      lastSavedSnapshot.current = toComparable(latestPostRef.current);
+      if (isMounted.current) {
+        setLastSaved(new Date());
+        setSaveStatus("SYNCED");
+        setError(null);
+      }
+      return true;
+    } catch (saveError) {
+      console.error("Manual save failed:", saveError);
+      if (isMounted.current) {
+        setSaveStatus("ERROR");
+        setError("AUTO_SAVE_FAILED");
+      }
+      return false;
+    } finally {
+      isSaving.current = false;
+    }
+  };
+
   return {
     saveStatus,
     lastSaved,
@@ -174,6 +200,7 @@ export function useAutoSave({
     setError,
     setSaveStatus,
     isDirty: isDirty(toComparable(post)),
+    saveNow,
     markSaved,
   };
 }

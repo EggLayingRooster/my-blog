@@ -73,7 +73,7 @@ const SHARED_CACHE_PREFIXES = [
   "/api/",
   "/images/",
   "/assets/",
-  "/_serverFn/",
+
   "/stats.js",
   "/rss.xml",
   "/atom.xml",

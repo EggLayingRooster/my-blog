@@ -116,6 +116,9 @@ export function getLoginAuthErrorMessage(
     case "EMAIL_NOT_VERIFIED":
       return messages.login_error_email_not_verified();
     case "INVALID_EMAIL_OR_PASSWORD":
+    case "INVALID_PASSWORD":
+    case "USER_NOT_FOUND":
+    case "CREDENTIAL_ACCOUNT_NOT_FOUND":
       return messages.login_error_invalid_credentials();
     default:
       return getSharedAuthErrorMessage(error, messages, {

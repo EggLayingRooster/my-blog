@@ -25,6 +25,33 @@ function resolveTransportSecurity(port: number) {
   };
 }
 
+async function withTimeout<T>(
+  operation: Promise<T>,
+  timeoutMs: number,
+  label: string,
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      operation,
+      new Promise<T>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error(`${label} timed out after ${timeoutMs}ms`)),
+          timeoutMs,
+        );
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+function sendMailerWithTimeout(
+  ...args: Parameters<typeof WorkerMailer.send>
+): ReturnType<typeof WorkerMailer.send> {
+  return withTimeout(WorkerMailer.send(...args), 20_000, "SMTP send");
+}
+
 function getSmtpAuthTypes(): AuthType[] {
   return ["plain", "login", "cram-md5"];
 }
@@ -60,7 +87,7 @@ export async function testEmailConnection(
     const { host, password, port, senderAddress, senderName, username } = data;
     const security = resolveTransportSecurity(port);
 
-    await WorkerMailer.send(
+    await sendMailerWithTimeout(
       {
         host,
         port,
@@ -236,7 +263,7 @@ export async function sendEmail(
   try {
     const security = resolveTransportSecurity(email.port);
 
-    await WorkerMailer.send(
+    await sendMailerWithTimeout(
       {
         host: email.host,
         port: email.port,

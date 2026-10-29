@@ -74,29 +74,38 @@ export class PostProcessWorkflow extends WorkflowEntrypoint<Env, Params> {
 
     if (shouldSkip || !initialPost) return;
 
-    // 2. Generate summary
-    const updatedPost = await step.do(
-      `generate summary for post ${postId}`,
-      {
-        retries: {
-          limit: 3,
-          delay: "5 seconds",
-          backoff: "exponential",
+    // 2. Generate summary（可选步骤：AI 失败不能阻断发布后的快照/缓存/搜索）
+    let updatedPost: Omit<NonNullable<typeof initialPost>, "publicContentJson"> =
+      initialPost;
+    try {
+      const summaryPost = await step.do(
+        `generate summary for post ${postId}`,
+        {
+          retries: {
+            limit: 2,
+            delay: "5 seconds",
+            backoff: "exponential",
+          },
         },
-      },
-      async () => {
-        const db = getDb(this.env);
-        const result = await PostService.generateSummaryByPostId({
-          context: { db, env: this.env },
+        async () => {
+          const db = getDb(this.env);
+          const result = await PostService.generateSummaryByPostId({
+            context: { db, env: this.env },
+            postId,
+          });
+          return result.error ? null : result.data;
+        },
+      );
+      if (summaryPost) updatedPost = summaryPost;
+    } catch (error) {
+      console.error(
+        JSON.stringify({
+          message: "post summary generation failed, continue publish process",
           postId,
-        });
-        if (result.error) {
-          return null;
-        }
-        return result.data;
-      },
-    );
-    if (!updatedPost) return;
+          error: error instanceof Error ? error.message : String(error),
+        }),
+      );
+    }
 
     // 3. Persist the highlighted public snapshot used by SSR/read paths.
     await step.do("build public content", async () => {
@@ -117,6 +126,11 @@ export class PostProcessWorkflow extends WorkflowEntrypoint<Env, Params> {
     if (!isFuturePost) {
       await step.do("update search index", async () => {
         return await upsertPostSearchIndex(this.env, updatedPost);
+      });
+    } else {
+      // 已发布文章改为未来时间：先移除旧索引，到点后由 ScheduledPublishWorkflow 重新写入
+      await step.do("remove future post from search index", async () => {
+        return await SearchService.deleteIndex({ env: this.env }, { id: postId });
       });
     }
 

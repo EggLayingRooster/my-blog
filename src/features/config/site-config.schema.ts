@@ -2,12 +2,37 @@ import { z } from "zod";
 import type { Messages } from "@/lib/i18n";
 import { SOCIAL_PLATFORM_KEYS } from "./utils/social-platforms";
 
-export const SocialLinkSchema = z.object({
-  platform: z.enum(SOCIAL_PLATFORM_KEYS),
-  url: z.string(),
-  icon: z.string().optional(),
-  label: z.string().optional(),
-});
+export const SocialLinkSchema = z
+  .object({
+    platform: z.enum(SOCIAL_PLATFORM_KEYS),
+    url: z.string().trim().max(500),
+    icon: z.string().max(500).optional(),
+    label: z.string().max(100).optional(),
+  })
+  .superRefine((link, ctx) => {
+    const value = link.url.trim();
+    // 允许站内相对链接（如 rss: /rss.xml）
+    if (value.startsWith("/")) return;
+
+    try {
+      const url = new URL(value);
+      const allowedProtocols =
+        link.platform === "email" ? ["mailto:"] : ["http:", "https:"];
+      if (!allowedProtocols.includes(url.protocol)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "Social link must use an allowed URL scheme",
+          path: ["url"],
+        });
+      }
+    } catch {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Social link must be a valid URL or root-relative path",
+        path: ["url"],
+      });
+    }
+  });
 
 export const DEFAULT_THEME_OPACITY_MIN = 0;
 export const DEFAULT_THEME_OPACITY_MAX = 0.4;

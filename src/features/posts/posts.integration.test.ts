@@ -93,6 +93,26 @@ describe("Posts Integration", () => {
       expect(updatedPost.status).toBe("published");
     });
 
+    it("rejects a stale post update", async () => {
+      const { id } = await PostService.createEmptyPost(adminContext);
+
+      await updatePost({
+        id,
+        data: { title: "First update" },
+      });
+
+      const staleResult = await PostService.updatePost(adminContext, {
+        id,
+        data: { title: "Stale update" },
+        expectedUpdatedAt: new Date(0).toISOString(),
+      });
+
+      expect(staleResult.error?.reason).toBe("POST_CONFLICT");
+      expect((await PostService.findPostById(adminContext, { id }))?.title).toBe(
+        "First update",
+      );
+    });
+
     it("should find a published post by slug", async () => {
       const { id } = await PostService.createEmptyPost(adminContext);
       await updatePost({

@@ -1,5 +1,6 @@
 import * as AuthRepo from "@/features/auth/data/auth.data";
 import * as ConfigService from "@/features/config/service/config.service";
+import { getDb } from "@/lib/db";
 
 export async function getSession(context: SessionContext) {
   return context.session;
@@ -19,4 +20,14 @@ export async function getIsEmailConfigured(
     config.email.password &&
     config.email.senderAddress
   );
+}
+
+/** scheduled 任务：清理过期 session 与验证 token */
+export async function cleanupExpiredAuthRecords(env: Env): Promise<void> {
+  const db = getDb(env);
+  await Promise.all([
+    AuthRepo.deleteExpiredSessions(db),
+    AuthRepo.deleteExpiredVerifications(db),
+  ]);
+  console.log(JSON.stringify({ message: "auth cleanup completed" }));
 }

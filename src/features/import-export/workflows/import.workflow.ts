@@ -1,6 +1,7 @@
 import type { WorkflowEvent, WorkflowStep } from "cloudflare:workers";
 import { WorkflowEntrypoint } from "cloudflare:workers";
 import * as CacheService from "@/features/cache/cache.service";
+import * as PostRepo from "@/features/posts/data/posts.data";
 import type {
   ImportReport,
   TaskProgress,
@@ -12,8 +13,33 @@ import {
   enumerateNativePosts,
   importSinglePost,
 } from "@/features/import-export/workflows/import-helpers";
+import * as SearchService from "@/features/search/service/search.service";
+import { TAGS_CACHE_KEYS } from "@/features/tags/tags.schema";
+import { getDb } from "@/lib/db";
 import { serverEnv } from "@/lib/env/server.env";
+import { purgeSiteCDNCache } from "@/lib/invalidate";
 import { m } from "@/paraglide/messages";
+
+const MAX_IMPORT_POSTS = 500;
+const IMPORT_RETRY_ATTEMPTS = 3;
+
+async function withRetries<T>(
+  operation: () => Promise<T>,
+  attempts = IMPORT_RETRY_ATTEMPTS,
+): Promise<T> {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      return await operation();
+    } catch (error) {
+      lastError = error;
+      if (attempt < attempts) {
+        await new Promise((resolve) => setTimeout(resolve, 250 * attempt));
+      }
+    }
+  }
+  throw lastError;
+}
 
 export class ImportWorkflow extends WorkflowEntrypoint<
   Env,
@@ -34,13 +60,23 @@ export class ImportWorkflow extends WorkflowEntrypoint<
       // Uint8Array does NOT survive JSON round-tripping, so we must NOT
       // return binary data from steps. Instead, each step re-fetches the
       // ZIP from R2 when it needs the binary content.
+      // 整个 run 只读取/解压一次 ZIP，避免每篇文章重复 R2 下载和 parseZip
+      const zipFilesForImport = await withRetries(() =>
+        this.fetchZipFiles(r2Key, locale),
+      );
+
       const postEntries = await step.do("enumerate posts", async () => {
-        const zipFiles = await this.fetchZipFiles(r2Key, locale);
         if (mode === "native") {
-          return enumerateNativePosts(zipFiles);
+          return enumerateNativePosts(zipFilesForImport);
         }
-        return enumerateMarkdownPosts(zipFiles);
+        return enumerateMarkdownPosts(zipFilesForImport);
       });
+
+      if (postEntries.length > MAX_IMPORT_POSTS) {
+        throw new Error(
+          `Import contains too many posts (max ${MAX_IMPORT_POSTS})`,
+        );
+      }
 
       console.log(
         JSON.stringify({
@@ -85,13 +121,14 @@ export class ImportWorkflow extends WorkflowEntrypoint<
             };
 
             try {
-              const zipFiles = await this.fetchZipFiles(r2Key, locale);
-              const result = await importSinglePost(
-                this.env,
-                zipFiles,
-                entry,
-                mode,
-                locale,
+              const result = await withRetries(() =>
+                importSinglePost(
+                  this.env,
+                  zipFilesForImport,
+                  entry,
+                  mode,
+                  locale,
+                ),
               );
               if (result.skipped) {
                 stepReport.warnings.push(
@@ -158,7 +195,110 @@ export class ImportWorkflow extends WorkflowEntrypoint<
         });
       }
 
-      // 3. Cleanup and finalize
+      // 3. Refresh public caches + search index（导入直接写库，不会经过发布 Workflow）
+      if (report.succeeded.length > 0) {
+        await step.do(
+          "invalidate caches and rebuild search index",
+          {
+            retries: { limit: 3, delay: "10 seconds", backoff: "exponential" },
+          },
+          async () => {
+            await Promise.all([
+              CacheService.bumpVersion({ env: this.env }, "posts:list"),
+              CacheService.bumpVersion({ env: this.env }, "posts:detail"),
+              CacheService.deleteKey(
+                { env: this.env },
+                TAGS_CACHE_KEYS.publicList,
+              ),
+            ]);
+
+            try {
+              await purgeSiteCDNCache(this.env);
+            } catch (error) {
+              console.error(
+                JSON.stringify({
+                  message: "import CDN purge failed",
+                  taskId,
+                  error: error instanceof Error ? error.message : String(error),
+                }),
+              );
+            }
+
+            await SearchService.rebuildIndex({
+              db: getDb(this.env),
+              env: this.env,
+            });
+          },
+        );
+      }
+
+      // 4. Cleanup and finalize
+
+      // 4. 导入的未来文章不会经过发布 Workflow，必须补建定时发布任务
+      if (report.succeeded.length > 0) {
+        const scheduled = await step.do(
+          "schedule imported future posts",
+          async () => {
+            const db = getDb(this.env);
+            let scheduledCount = 0;
+            const failures: Array<string> = [];
+
+            for (const item of report.succeeded) {
+              const post = await PostRepo.findPostBySlug(db, item.slug);
+              if (
+                !post ||
+                post.status !== "published" ||
+                !post.publishedAt ||
+                post.publishedAt.getTime() <= Date.now()
+              ) {
+                continue;
+              }
+
+              const instanceId = `post-${post.id}-scheduled`;
+              try {
+                const old = await this.env.SCHEDULED_PUBLISH_WORKFLOW.get(
+                  instanceId,
+                );
+                await old.terminate();
+              } catch {
+                // no previous instance
+              }
+
+              try {
+                await this.env.SCHEDULED_PUBLISH_WORKFLOW.createBatch([
+                  {
+                    id: instanceId,
+                    params: {
+                      postId: post.id,
+                      publishedAt: post.publishedAt.toISOString(),
+                    },
+                  },
+                ]);
+                scheduledCount += 1;
+              } catch (error) {
+                failures.push(
+                  `Failed to schedule ${post.slug}: ${
+                    error instanceof Error ? error.message : String(error)
+                  }`,
+                );
+              }
+            }
+
+            return { failures, scheduledCount };
+          },
+        );
+
+        report.warnings.push(...scheduled.failures);
+        console.log(
+          JSON.stringify({
+            message: "imported future posts scheduled",
+            taskId,
+            scheduled: scheduled.scheduledCount,
+            failed: scheduled.failures.length,
+          }),
+        );
+      }
+
       await step.do("finalize", async () => {
         try {
           await this.env.R2.delete(r2Key);

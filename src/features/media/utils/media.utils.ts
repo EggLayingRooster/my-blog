@@ -169,3 +169,213 @@ export function buildTransformOptions(
 
   return transformOptions;
 }
+
+const IMAGE_QUERY_KEYS = new Set([
+  "original",
+  "width",
+  "height",
+  "quality",
+  "fit",
+  "v",
+]);
+
+/**
+ * 严格校验/规范化 /images 查询参数：
+ * - 只允许已知参数（含站点资源缓存版本 v）
+ * - 非法值直接拒绝，避免任意 query 生成无限 CDN 缓存与 Image Resizing 调用
+ * - 返回固定顺序的规范化参数，等价 URL 会收敛到同一缓存键
+ */
+export function normalizeImageQuery(
+  searchParams: URLSearchParams,
+  options: { isAsset?: boolean } = {},
+): { ok: boolean; query: URLSearchParams } {
+  const query = new URLSearchParams();
+  const seen = new Set<string>();
+
+  for (const key of searchParams.keys()) {
+    if (!IMAGE_QUERY_KEYS.has(key)) return { ok: false, query };
+    if (seen.has(key)) return { ok: false, query };
+    seen.add(key);
+    if (key === "v" && !options.isAsset) return { ok: false, query };
+  }
+
+  const original = searchParams.get("original");
+  if (original !== null && original !== "true") return { ok: false, query };
+  // 原图请求忽略 transform 参数（zoomable 会在已有 quality/width 的 URL 上追加 original=true）
+
+  const readInteger = (name: string, min: number, max: number) => {
+    const raw = searchParams.get(name);
+    if (raw === null) return undefined;
+    if (!/^\d+$/.test(raw)) return null;
+    const value = Number.parseInt(raw, 10);
+    if (value < min || value > max) return null;
+    return value;
+  };
+
+  const width = readInteger("width", 1, MAX_TRANSFORM_DIMENSION);
+  if (width === null) return { ok: false, query };
+  const height = readInteger("height", 1, MAX_TRANSFORM_DIMENSION);
+  if (height === null) return { ok: false, query };
+  const quality = readInteger("quality", 1, 100);
+  if (quality === null) return { ok: false, query };
+
+  const fit = searchParams.get("fit");
+  if (fit !== null && !ALLOWED_TRANSFORM_FITS.has(fit)) {
+    return { ok: false, query };
+  }
+
+  const version = searchParams.get("v");
+  if (version !== null && !/^[a-zA-Z0-9._-]{1,64}$/.test(version)) {
+    return { ok: false, query };
+  }
+
+  if (original === "true") {
+    query.set("original", "true");
+  } else {
+    if (width !== undefined) query.set("width", String(width));
+    if (height !== undefined) query.set("height", String(height));
+    if (quality !== undefined) query.set("quality", String(quality));
+    if (fit !== null) query.set("fit", fit);
+  }
+  if (version !== null) query.set("v", version);
+
+  return { ok: true, query };
+}
+
+function concatBytes(parts: Array<Uint8Array>): Uint8Array {
+  const total = parts.reduce((sum, part) => sum + part.byteLength, 0);
+  const output = new Uint8Array(total);
+  let offset = 0;
+  for (const part of parts) {
+    output.set(part, offset);
+    offset += part.byteLength;
+  }
+  return output;
+}
+
+function stripJpegMetadata(bytes: Uint8Array): Uint8Array {
+  // 移除 APP1(EXIF/XMP)、APP13、COM，保留其余段与压缩数据
+  const parts: Array<Uint8Array> = [bytes.slice(0, 2)];
+  let offset = 2;
+
+  while (offset + 4 <= bytes.length) {
+    const segmentStart = offset;
+    let markerOffset = offset;
+    while (markerOffset < bytes.length && bytes[markerOffset] === 0xff) {
+      markerOffset += 1;
+    }
+    if (markerOffset >= bytes.length) return bytes;
+    const marker = bytes[markerOffset];
+
+    // SOS：复制剩余所有压缩数据
+    if (marker === 0xda) {
+      parts.push(bytes.slice(segmentStart));
+      return concatBytes(parts);
+    }
+
+    // 无长度字段的标记
+    if (marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) {
+      parts.push(bytes.slice(segmentStart, markerOffset + 1));
+      offset = markerOffset + 1;
+      continue;
+    }
+
+    if (marker === 0xd9) {
+      parts.push(bytes.slice(segmentStart, markerOffset + 1));
+      return concatBytes(parts);
+    }
+
+    const lengthOffset = markerOffset + 1;
+    if (lengthOffset + 2 > bytes.length) return bytes;
+    const segmentLength =
+      (bytes[lengthOffset] << 8) | bytes[lengthOffset + 1];
+    if (segmentLength < 2 || lengthOffset + segmentLength > bytes.length) {
+      return bytes;
+    }
+
+    const drop =
+      marker === 0xe1 || marker === 0xed || marker === 0xfe;
+    if (!drop) {
+      parts.push(bytes.slice(segmentStart, lengthOffset + segmentLength));
+    }
+    offset = lengthOffset + segmentLength;
+  }
+
+  return bytes;
+}
+
+function stripPngMetadata(bytes: Uint8Array): Uint8Array {
+  const parts: Array<Uint8Array> = [bytes.slice(0, 8)];
+  let offset = 8;
+  let sawIend = false;
+  while (offset + 12 <= bytes.length) {
+    const view = new DataView(bytes.buffer, bytes.byteOffset + offset);
+    const length = view.getUint32(0);
+    const type = String.fromCharCode(
+      bytes[offset + 4],
+      bytes[offset + 5],
+      bytes[offset + 6],
+      bytes[offset + 7],
+    );
+    const end = offset + 12 + length;
+    if (end > bytes.length) return bytes;
+    const drop = ["tEXt", "zTXt", "iTXt", "eXIf"].includes(type);
+    if (!drop) parts.push(bytes.slice(offset, end));
+    offset = end;
+    if (type === "IEND") {
+      sawIend = true;
+      break;
+    }
+  }
+  // 结构不完整时不做修改，避免破坏异常/截断图片
+  return sawIend ? concatBytes(parts) : bytes;
+}
+
+function stripWebpMetadata(bytes: Uint8Array): Uint8Array {
+  if (bytes.length < 20) return bytes;
+  const parts: Array<Uint8Array> = [];
+  const kept: Array<Uint8Array> = [];
+  let offset = 12;
+  while (offset + 8 <= bytes.length) {
+    const view = new DataView(bytes.buffer, bytes.byteOffset + offset);
+    const type = String.fromCharCode(
+      bytes[offset],
+      bytes[offset + 1],
+      bytes[offset + 2],
+      bytes[offset + 3],
+    );
+    const length = view.getUint32(4, true);
+    const end = offset + 8 + length + (length % 2);
+    if (end > bytes.length) return bytes;
+    if (type !== "EXIF" && type !== "XMP ") {
+      kept.push(bytes.slice(offset, end));
+    }
+    offset = end;
+    if (offset >= bytes.length) break;
+  }
+  if (offset < bytes.length) kept.push(bytes.slice(offset));
+  const body = concatBytes(kept);
+  const header = bytes.slice(0, 12).slice();
+  const size = body.byteLength + 4;
+  header[4] = size & 0xff;
+  header[5] = (size >> 8) & 0xff;
+  header[6] = (size >> 16) & 0xff;
+  header[7] = (size >> 24) & 0xff;
+  parts.push(header, body);
+  return concatBytes(parts);
+}
+
+/** 上传前剥离 EXIF/GPS/XMP/注释等元数据，避免原图泄露拍摄位置等信息 */
+export function stripImageMetadata(
+  bytes: Uint8Array,
+  mimeType: string,
+): Uint8Array {
+  try {
+    if (mimeType === "image/jpeg") return stripJpegMetadata(bytes);
+    if (mimeType === "image/png") return stripPngMetadata(bytes);
+    if (mimeType === "image/webp") return stripWebpMetadata(bytes);
+    return bytes;
+  } catch {
+    return bytes;
+  }
+}

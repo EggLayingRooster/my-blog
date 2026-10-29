@@ -6,7 +6,7 @@ export const ImportExportLocaleSchema = z.enum(["zh", "en"]);
 // --- Export ---
 
 export const StartExportInputSchema = z.object({
-  postIds: z.array(z.number()).optional(),
+  postIds: z.array(z.number().int().positive()).max(500).optional(),
   status: z.enum(POST_STATUSES).optional(),
 });
 

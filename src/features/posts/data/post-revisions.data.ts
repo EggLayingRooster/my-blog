@@ -17,6 +17,7 @@ export async function listPostRevisions(db: DB, postId: number) {
   return await db.query.PostRevisionsTable.findMany({
     where: eq(PostRevisionsTable.postId, postId),
     orderBy: [desc(PostRevisionsTable.createdAt), desc(PostRevisionsTable.id)],
+    limit: 100,
   });
 }
 
@@ -180,4 +181,26 @@ export async function deletePostRevisions(
     .returning({
       id: PostRevisionsTable.id,
     });
+}
+
+/** 所有类型修订统一保留上限，避免手动/发布/恢复备份无限增长 */
+export async function trimPostRevisions(
+  db: DB,
+  postId: number,
+  options: { keep: number },
+): Promise<void> {
+  const revisions = await db.query.PostRevisionsTable.findMany({
+    where: eq(PostRevisionsTable.postId, postId),
+    columns: { id: true },
+    orderBy: [desc(PostRevisionsTable.createdAt), desc(PostRevisionsTable.id)],
+  });
+
+  const staleIds = revisions
+    .slice(options.keep)
+    .map((revision) => revision.id);
+  if (staleIds.length === 0) return;
+
+  await db
+    .delete(PostRevisionsTable)
+    .where(inArray(PostRevisionsTable.id, staleIds));
 }

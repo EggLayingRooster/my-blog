@@ -44,14 +44,15 @@ export async function getMediaList(
 ): Promise<{ items: Array<Media>; nextCursor: number | null }> {
   const {
     cursor,
-    limit = DEFAULT_PAGE_SIZE,
+    limit: rawLimit = DEFAULT_PAGE_SIZE,
     search,
     unusedOnly,
   } = options ?? {};
+  const limit = Math.min(Math.max(rawLimit, 1), 100);
 
   // 构建条件
   const conditions: Array<SQL> = [];
-  if (cursor) {
+  if (cursor && cursor > 0) {
     conditions.push(lt(MediaTable.id, cursor));
   }
   if (search) {
@@ -116,4 +117,58 @@ export async function getTotalMediaSize(db: DB) {
     .from(MediaTable);
 
   return Number(result.total ?? 0);
+}
+
+/** 条件删除：仅当不存在 post_media 引用时才删除，避免与文章保存并发产生断链 */
+export async function deleteMediaIfUnused(
+  db: DB,
+  key: string,
+): Promise<boolean> {
+  const deleted = await db
+    .delete(MediaTable)
+    .where(
+      and(
+        eq(MediaTable.key, key),
+        sql`NOT EXISTS (SELECT 1 FROM ${PostMediaTable} WHERE ${PostMediaTable.mediaId} = ${MediaTable.id})`,
+      ),
+    )
+    .returning({ id: MediaTable.id });
+
+  return deleted.length > 0;
+}
+
+/** 历史媒体元数据回溯：按 id 游标分批读取 */
+export async function getMediaBatchForMetadataBackfill(
+  db: DB,
+  options: { cursor: number; limit: number },
+): Promise<
+  Array<{
+    id: number;
+    key: string;
+    mimeType: string;
+  }>
+> {
+  const rows = await db
+    .select({
+      id: MediaTable.id,
+      key: MediaTable.key,
+      mimeType: MediaTable.mimeType,
+    })
+    .from(MediaTable)
+    .where(sql`${MediaTable.id} > ${options.cursor}`)
+    .orderBy(MediaTable.id)
+    .limit(options.limit);
+
+  return rows;
+}
+
+export async function updateMediaSize(
+  db: DB,
+  key: string,
+  sizeInBytes: number,
+): Promise<void> {
+  await db
+    .update(MediaTable)
+    .set({ sizeInBytes })
+    .where(eq(MediaTable.key, key));
 }

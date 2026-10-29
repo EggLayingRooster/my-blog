@@ -10,7 +10,7 @@ export function createAuthConfig() {
       storeSessionInDatabase: true,
       cookieCache: {
         enabled: true,
-        maxAge: 5 * 60,
+        maxAge: 60,
       },
     },
     plugins: [admin()],

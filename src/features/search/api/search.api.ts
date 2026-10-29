@@ -8,7 +8,10 @@ import { adminMiddleware, dbMiddleware } from "@/lib/middlewares";
 
 export const buildSearchIndexFn = createServerFn({ method: "POST" })
   .middleware([adminMiddleware])
-  .handler(({ context }) => SearchService.rebuildIndex(context));
+  .handler(async ({ context }) => {
+    await context.env.QUEUE.send({ type: "SEARCH_REBUILD" });
+    return { queued: true as const };
+  });
 
 export const upsertSearchDocFn = createServerFn({ method: "POST" })
   .middleware([adminMiddleware])

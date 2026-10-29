@@ -175,11 +175,17 @@ export async function createPostRevision(
     });
   }
 
+  await PostRevisionRepo.trimPostRevisions(context.db, data.postId, {
+    keep: MAX_TOTAL_REVISIONS_PER_POST,
+  });
+
   return ok<CreatePostRevisionResult>({
     created: true,
     revision,
   });
 }
+
+const MAX_TOTAL_REVISIONS_PER_POST = 100;
 
 export async function restorePostRevision(
   context: DbContext & { executionCtx: ExecutionContext },
@@ -238,6 +244,25 @@ export async function restorePostRevision(
   if (targetSnapshot.contentJson !== undefined) {
     context.executionCtx.waitUntil(
       syncPostMedia(context.db, restoredPost.id, targetSnapshot.contentJson),
+    );
+  }
+
+  // 恢复只改 DB；必须重新走发布/下架流程，否则 publicContentJson/cache/search 仍是旧状态
+  try {
+    const { startPostProcessWorkflow } = await import("./posts.service");
+    await startPostProcessWorkflow(context, {
+      id: restoredPost.id,
+      status: targetSnapshot.status,
+      clientToday: new Date().toISOString().slice(0, 10),
+      publishedAt: targetSnapshot.publishedAt,
+    });
+  } catch (error) {
+    console.error(
+      JSON.stringify({
+        message: "restore post process trigger failed",
+        postId: restoredPost.id,
+        error: error instanceof Error ? error.message : String(error),
+      }),
     );
   }
 

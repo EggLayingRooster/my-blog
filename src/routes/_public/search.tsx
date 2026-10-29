@@ -2,6 +2,7 @@ import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import theme from "@theme";
 import { useEffect, useMemo, useState } from "react";
+import { toast } from "sonner";
 import { z } from "zod";
 import { siteConfigQuery } from "@/features/config/queries";
 import { buildPageTitle } from "@/lib/seo";
@@ -69,12 +70,22 @@ function SearchRoute() {
     staleTime: 5 * 60 * 1000,
   });
 
-  const { data: results, isLoading: isSearching } = useQuery({
+  const {
+    data: results,
+    isLoading: isSearching,
+    error: searchError,
+  } = useQuery({
     ...searchDocsQueryOptions(debouncedQuery, meta?.version || "init"),
     enabled: debouncedQuery.length > 0 && !!meta?.version,
     staleTime: Infinity,
     placeholderData: keepPreviousData,
   });
+
+  useEffect(() => {
+    if (searchError) {
+      toast.error(m.error_desc());
+    }
+  }, [searchError]);
 
   const searchResults = useMemo(() => results ?? [], [results]);
 

@@ -29,6 +29,21 @@ export function slugify(text: string | null | undefined) {
   return cleaned || "untitled-log";
 }
 
+/**
+ * 为标题生成稳定且唯一的锚点 id（重复标题追加 -1/-2...）。
+ * 渲染与 TOC 必须使用同一个生成逻辑，否则锚点会漂移。
+ */
+export function createHeadingIdGenerator() {
+  const counts = new Map<string, number>();
+
+  return (text: string | null | undefined): string => {
+    const base = slugify(text);
+    const count = counts.get(base) ?? 0;
+    counts.set(base, count + 1);
+    return count === 0 ? base : `${base}-${count}`;
+  };
+}
+
 export function extractAllImageKeys(doc: JSONContent | null): Array<string> {
   const keys: Array<string> = [];
 

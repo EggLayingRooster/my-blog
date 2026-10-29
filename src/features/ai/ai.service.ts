@@ -1,6 +1,11 @@
 import { generateText, Output } from "ai";
 import { createWorkersAI } from "workers-ai-provider";
 import { z } from "zod";
+import {
+  containsPromptInjection,
+  MAX_AI_INPUT_CHARS,
+  truncateAiText,
+} from "./ai.input";
 
 export interface ModerationResult {
   safe: boolean;
@@ -10,6 +15,9 @@ export interface ModerationResult {
 type WorkersAITextModel = Parameters<ReturnType<typeof createWorkersAI>>[0];
 
 const TEXT_MODEL = "@cf/zai-org/glm-4.7-flash" satisfies WorkersAITextModel;
+const MAX_AI_TIMEOUT_MS = 30_000;
+const MAX_GENERATED_TAGS = 5;
+const MAX_TAG_LENGTH = 50;
 
 function buildSameLanguageDirective(options: {
   sourceDescription: string;
@@ -39,10 +47,29 @@ export async function moderateComment(
     };
   },
 ): Promise<ModerationResult> {
+  const comment = content.comment.slice(0, 4_000);
+  const postTitle = content.post.title.slice(0, 200);
+  const postSummary = (content.post.summary ?? "").slice(0, 500);
+  const postPreview = (content.post.contentPreview ?? "").slice(0, 2_000);
+  const rootComment = (content.thread?.rootComment ?? "").slice(0, 2_000);
+  const replyToComment = (content.thread?.replyToComment ?? "").slice(
+    0,
+    2_000,
+  );
+
+  // 模型审核之外的第一道确定性防线：明显的提示词注入直接转人工
+  if (containsPromptInjection(comment)) {
+    return {
+      safe: false,
+      reason: "Comment contains prompt-injection patterns",
+    };
+  }
+
   const workersAI = createWorkersAI({ binding: context.env.AI });
 
   const result = await generateText({
     model: workersAI(TEXT_MODEL),
+    abortSignal: AbortSignal.timeout(MAX_AI_TIMEOUT_MS),
     messages: [
       {
         role: "system",
@@ -71,15 +98,15 @@ ${buildSameLanguageDirective({
       },
       {
         role: "user",
-        content: `文章标题：${content.post.title}
-文章摘要：${content.post.summary || "无"}
-文章正文预览：${content.post.contentPreview || "无"}
+        content: `文章标题：${postTitle}
+文章摘要：${postSummary || "无"}
+文章正文预览：${postPreview || "无"}
 是否为回复评论：${content.thread?.isReply ? "是" : "否"}
-根评论内容：${content.thread?.rootComment || "无"}
-被回复评论内容：${content.thread?.replyToComment || "无"}
+根评论内容：${rootComment || "无"}
+被回复评论内容：${replyToComment || "无"}
 待审核评论内容：
 """
-${content.comment}
+${comment}
 """`,
       },
     ],
@@ -98,10 +125,12 @@ ${content.comment}
 }
 
 export async function summarizeText(context: { env: Env }, text: string) {
+  const input = truncateAiText(text, MAX_AI_INPUT_CHARS);
   const workersAI = createWorkersAI({ binding: context.env.AI });
 
   const result = await generateText({
     model: workersAI(TEXT_MODEL),
+    abortSignal: AbortSignal.timeout(MAX_AI_TIMEOUT_MS),
     temperature: 0.3,
     messages: [
       {
@@ -117,13 +146,13 @@ ${buildSameLanguageDirective({
       },
       {
         role: "user",
-        content: text,
+        content: input,
       },
     ],
   });
 
   return {
-    summary: result.text.trim(),
+    summary: result.text.trim().slice(0, 500),
   };
 }
 
@@ -138,10 +167,15 @@ export async function generateTags(
   },
   existingTags: Array<string> = [],
 ) {
+  const safeExistingTags = existingTags
+    .slice(0, 100)
+    .map((tag) => tag.trim().slice(0, MAX_TAG_LENGTH))
+    .filter(Boolean);
   const workersAI = createWorkersAI({ binding: context.env.AI });
 
   const result = await generateText({
     model: workersAI(TEXT_MODEL),
+    abortSignal: AbortSignal.timeout(MAX_AI_TIMEOUT_MS),
     temperature: 0,
     messages: [
       {
@@ -167,7 +201,7 @@ ${buildSameLanguageDirective({
       {
         role: "user",
         content: `### 已存在的标签列表(仅在精准匹配时使用，否则忽略):
-${JSON.stringify(existingTags)}
+${JSON.stringify(safeExistingTags)}
 
 ### 待分析文章:
 文章标题：${content.title}
@@ -184,5 +218,8 @@ ${content.content ? content.content.slice(0, 8000) : "无"}
     }),
   });
 
-  return [...new Set(result.output.tags)];
+  const tags = result.output.tags
+    .map((tag) => tag.trim())
+    .filter((tag) => tag.length > 0 && tag.length <= MAX_TAG_LENGTH);
+  return [...new Set(tags)].slice(0, MAX_GENERATED_TAGS);
 }

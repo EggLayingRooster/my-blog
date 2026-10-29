@@ -46,7 +46,7 @@ export const getLinkedMediaKeysFn = createServerFn()
   .middleware([adminMiddleware])
   .inputValidator(
     z.object({
-      keys: z.array(z.string()),
+      keys: z.array(z.string().min(1).max(200)).max(100),
     }),
   )
   .handler(({ data, context }) =>
@@ -63,3 +63,12 @@ export const updateMediaNameFn = createServerFn({
   .middleware([adminMiddleware])
   .inputValidator(UpdateMediaNameInputSchema)
   .handler(({ data, context }) => MediaService.updateMediaName(context, data));
+
+export const cleanupUnusedMediaFn = createServerFn({ method: "POST" })
+  .middleware([adminMiddleware])
+  .inputValidator(
+    z.object({ limit: z.number().int().min(1).max(500).optional() }),
+  )
+  .handler(({ data, context }) =>
+    MediaService.cleanupUnusedMedia(context, data),
+  );

@@ -114,7 +114,13 @@ export function usePostActions({
 
   const processDataMutation = useMutation({
     mutationFn: startPostProcessWorkflowFn,
-    onSuccess: () => {
+    onSuccess: (result) => {
+      if (result?.updatedAt) {
+        setPost((prev) => ({
+          ...prev,
+          updatedAt: new Date(result.updatedAt),
+        }));
+      }
       // Feedback: Notify user task is running
       toast(m.editor_action_publish_start(), {
         description: m.editor_action_publish_desc(),
@@ -152,6 +158,9 @@ export function usePostActions({
           id: postId,
           status: post.status,
           clientToday: toLocalDateString(new Date()),
+          publishedAt: post.publishedAt
+            ? post.publishedAt.toISOString()
+            : null,
         },
       });
     }, 800);

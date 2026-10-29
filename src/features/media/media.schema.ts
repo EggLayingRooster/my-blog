@@ -51,9 +51,9 @@ export const UpdateMediaNameInputSchema = z.object({
 });
 
 export const GetMediaListInputSchema = z.object({
-  cursor: z.number().optional(),
-  limit: z.number().optional(),
-  search: z.string().optional(),
+  cursor: z.number().int().positive().optional(),
+  limit: z.number().int().min(1).max(100).optional(),
+  search: z.string().max(200).optional(),
   unusedOnly: z.boolean().optional(),
 });
 

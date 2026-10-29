@@ -1,5 +1,6 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
+import { toast } from "sonner";
 import { MEDIA_KEYS } from "@/features/media/queries";
 import { updatePostFn as adminUpdatePostFn } from "@/features/posts/api/posts.admin.api";
 import { PostEditor } from "@/features/posts/components/post-editor";
@@ -73,25 +74,28 @@ function EditPost() {
     publishedAt: post.publishedAt,
     tagIds: tags.map((t) => t.id),
     pinnedAt: post.pinnedAt,
+    updatedAt: post.updatedAt,
     isSynced: post.isSynced,
     hasPublicCache: post.hasPublicCache,
   };
 
   const handleSave = async (data: PostEditorData) => {
-    const publishedAt =
-      data.status === "published" && !post.publishedAt
-        ? new Date()
-        : data.publishedAt;
+    // 状态与发布时间只允许通过发布/下架 action 修改，避免绕过发布流程
+    const {
+      status: _status,
+      publishedAt: _publishedAt,
+      updatedAt,
+      isSynced: _isSynced,
+      hasPublicCache: _hasPublicCache,
+      ...editable
+    } = data;
 
-    // Parallelize updates
     const [updateResult] = await Promise.all([
       adminUpdatePostFn({
         data: {
           id: post.id,
-          data: {
-            ...data,
-            publishedAt,
-          },
+          data: editable,
+          expectedUpdatedAt: updatedAt.toISOString(),
         },
       }),
       setPostTagsFn({
@@ -103,6 +107,10 @@ function EditPost() {
     ]);
 
     if (updateResult.error) {
+      if (updateResult.error.reason === "POST_CONFLICT") {
+        toast.error(m.admin_post_edit_conflict());
+        throw new Error("POST_CONFLICT");
+      }
       throw new Error(m.admin_post_edit_error_not_found());
     }
 
@@ -119,6 +127,8 @@ function EditPost() {
     queryClient.invalidateQueries({
       queryKey: MEDIA_KEYS.linked,
     });
+
+    return updateResult.data.updatedAt;
   };
 
   return <PostEditor initialData={initialData} onSave={handleSave} />;

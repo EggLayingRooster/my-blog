@@ -31,8 +31,9 @@ export function buildSnippet({
   const source = text?.trim() ?? "";
   if (source.length === 0) return null;
 
-  const activeTerms =
-    terms.length > 0 ? terms : fallbackTerm ? [fallbackTerm] : [];
+  const activeTerms = (
+    terms.length > 0 ? terms : fallbackTerm ? [fallbackTerm] : []
+  ).filter((term) => term.length > 0 && term.length <= 50);
 
   if (activeTerms.length === 0) {
     return escapeSearchHtml(source.slice(0, snippetSlice));

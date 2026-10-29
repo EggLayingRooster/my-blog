@@ -1,6 +1,7 @@
 import type { HighlighterCore, LanguageRegistration } from "shiki/core";
 import { createHighlighterCore } from "shiki/core";
 import { createJavaScriptRegexEngine } from "shiki/engine/javascript";
+import { escapeHtml } from "@/lib/html";
 import viteDark from "shiki/themes/vitesse-dark.mjs";
 import viteLight from "shiki/themes/vitesse-light.mjs";
 
@@ -112,7 +113,7 @@ export async function highlight(code: string, lang: string) {
     });
   } catch (e) {
     console.warn(`Failed to highlight language: ${lang}`, e);
-    return `<pre><code>${code}</code></pre>`;
+    return `<pre><code>${escapeHtml(code)}</code></pre>`;
   }
 }
 
