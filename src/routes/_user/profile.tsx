@@ -57,10 +57,9 @@ function ProfilePage() {
         logout={logout}
       />
       <AccountSessionsSection />
-      <AccountSecurityActions
-        hasPassword={!!hasPassword}
-        isAdmin={user.role === "admin"}
-      />
+      {user.role !== "admin" && (
+        <AccountSecurityActions hasPassword={!!hasPassword} />
+      )}
     </>
   );
 }

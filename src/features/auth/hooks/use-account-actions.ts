@@ -3,15 +3,9 @@ import { toast } from "sonner";
 import { authClient } from "@/lib/auth/auth.client";
 import { m } from "@/paraglide/messages";
 
-export function useAccountActions(options: {
-  hasPassword: boolean;
-  isAdmin: boolean;
-}) {
+export function useAccountActions(options: { hasPassword: boolean }) {
   const changeEmail = useMutation({
     mutationFn: async (newEmail: string) => {
-      if (options.isAdmin) {
-        throw new Error(m.profile_account_admin_forbidden());
-      }
       const { error } = await authClient.changeEmail({
         newEmail,
         callbackURL: `${window.location.origin}/profile`,
@@ -30,9 +24,6 @@ export function useAccountActions(options: {
 
   const deleteAccount = useMutation({
     mutationFn: async (input: { password?: string }) => {
-      if (options.isAdmin) {
-        throw new Error(m.profile_account_admin_forbidden());
-      }
       const { error } = await authClient.deleteUser({
         password: options.hasPassword ? input.password : undefined,
         callbackURL: `${window.location.origin}/`,

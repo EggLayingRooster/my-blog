@@ -6,10 +6,8 @@ import { m } from "@/paraglide/messages";
 
 export function AccountSecurityActions({
   hasPassword,
-  isAdmin,
 }: {
   hasPassword: boolean;
-  isAdmin: boolean;
 }) {
   const [newEmail, setNewEmail] = useState("");
   const [confirmEmail, setConfirmEmail] = useState("");
@@ -19,7 +17,7 @@ export function AccountSecurityActions({
     isChangingEmail,
     deleteAccount,
     isDeletingAccount,
-  } = useAccountActions({ hasPassword, isAdmin });
+  } = useAccountActions({ hasPassword });
 
   return (
     <section className="w-full max-w-3xl mx-auto px-6 md:px-0 pb-16 space-y-10">
@@ -43,17 +41,14 @@ export function AccountSecurityActions({
             value={newEmail}
             onChange={(event) => setNewEmail(event.target.value)}
             placeholder="new@example.com"
-            disabled={isAdmin || isChangingEmail}
+            disabled={isChangingEmail}
             className="max-w-sm"
           />
           <Button
             type="button"
             variant="outline"
             disabled={
-              isAdmin ||
-              isChangingEmail ||
-              !newEmail.trim() ||
-              !newEmail.includes("@")
+              isChangingEmail || !newEmail.trim() || !newEmail.includes("@")
             }
             onClick={() => changeEmail(newEmail.trim())}
             className="font-mono text-[10px] uppercase tracking-wider"
@@ -61,11 +56,6 @@ export function AccountSecurityActions({
             {m.profile_email_change_action()}
           </Button>
         </div>
-        {isAdmin && (
-          <p className="text-xs text-amber-500">
-            {m.profile_account_admin_forbidden()}
-          </p>
-        )}
       </div>
 
       <div className="space-y-3 border border-destructive/30 p-5">
@@ -81,7 +71,7 @@ export function AccountSecurityActions({
             value={confirmEmail}
             onChange={(event) => setConfirmEmail(event.target.value)}
             placeholder={m.profile_account_delete_confirm_placeholder()}
-            disabled={isAdmin || isDeletingAccount}
+            disabled={isDeletingAccount}
           />
           {hasPassword && (
             <Input
@@ -89,7 +79,7 @@ export function AccountSecurityActions({
               value={password}
               onChange={(event) => setPassword(event.target.value)}
               placeholder={m.profile_current_password()}
-              disabled={isAdmin || isDeletingAccount}
+              disabled={isDeletingAccount}
             />
           )}
         </div>
@@ -97,7 +87,6 @@ export function AccountSecurityActions({
           type="button"
           variant="outline"
           disabled={
-            isAdmin ||
             isDeletingAccount ||
             !confirmEmail.trim() ||
             (hasPassword && !password)
@@ -107,11 +96,6 @@ export function AccountSecurityActions({
         >
           {m.profile_account_delete_action()}
         </Button>
-        {isAdmin && (
-          <p className="text-xs text-amber-500">
-            {m.profile_account_admin_forbidden()}
-          </p>
-        )}
       </div>
     </section>
   );
