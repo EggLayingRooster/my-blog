@@ -114,9 +114,9 @@ export const Route = createRootRouteWithContext<MyRouterContext>()({
               src: "/stats.js",
               defer: true,
               "data-website-id": env.VITE_UMAMI_WEBSITE_ID,
-              // 不设置 data-host-url：让 Umami 脚本按自身默认地址直连上报，
-              // 这样 Umami 拿到的是访客真实 IP（经 /api/send 代理时会被 Cloudflare
-              // 改写为 Worker 出口 IP，地理位置会全部显示成同一个地区）。
+              // 走本站 /api/send 代理：避免 gateway.umami.is 被广告拦截，
+              // 同时由 Worker 代理转发访客真实 IP 与 User-Agent。
+              "data-host-url": "/",
             },
           ]
         : [],

@@ -77,8 +77,25 @@ app.all("/api/send", async (c) => {
   if (!umamiSrc) {
     return c.text("Not Found", 404);
   }
-  const sendUrl = new URL("/api/send", umamiSrc).toString();
-  return proxy(sendUrl, c.req);
+
+  const sourceUrl = new URL(umamiSrc);
+  // Umami Cloud 的采集端点是 gateway.umami.is；自建实例才使用自己的 /api/send。
+  const sendUrl =
+    sourceUrl.hostname === "cloud.umami.is" ||
+    sourceUrl.hostname === "gateway.umami.is"
+      ? "https://gateway.umami.is/api/send"
+      : new URL("/api/send", sourceUrl).toString();
+
+  const clientIp = c.req.header("cf-connecting-ip");
+  return proxy(sendUrl, {
+    raw: c.req.raw,
+    headers: {
+      ...c.req.header(),
+      ...(clientIp
+        ? { "x-forwarded-for": clientIp, "x-real-ip": clientIp }
+        : {}),
+    },
+  });
 });
 
 const imageRateLimit = createMiddleware(async (c, next) => {
